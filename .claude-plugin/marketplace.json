@@ -1,0 +1,14 @@
+{
+  "name": "ristretto-dev",
+  "owner": { "name": "Jakob" },
+  "metadata": {
+    "description": "Local marketplace for the ristretto plugin — lean ticket implementation in Claude Code."
+  },
+  "plugins": [
+    {
+      "name": "ristretto",
+      "source": "./",
+      "description": "Lean ticket implementation: prep intent-level plans, pull them into clean code."
+    }
+  ]
+}
