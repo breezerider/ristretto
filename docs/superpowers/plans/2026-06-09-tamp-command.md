@@ -206,7 +206,7 @@ In the `## Usage` fenced block, after the `/ristretto:shot ...` line, add:
 ```
 /ristretto:tamp                              # review the changes I just made
 /ristretto:tamp src/auth                     # green-up pass on existing code
-/ristretto:tamp VDA-224 fix                  # review a ticket's diff and apply the top fixes
+/ristretto:tamp BREW-224 fix                 # review a ticket's diff and apply the top fixes
 ```
 
 - [ ] **Step 5: Verify**

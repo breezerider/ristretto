@@ -1,30 +1,30 @@
 ---
-description: Pull one ticket from the roadmap and implement it cleanly in auto mode against the current code, then commit on a feature branch and close it. Pass "nocommit" to skip committing.
-argument-hint: <ticket ID, or "next"> [nocommit]
+description: Pull one feature from the roadmap and implement it cleanly in auto mode against the current code, then commit on a feature branch and close it. Pass "nocommit" to skip committing.
+argument-hint: <feature ID, or "next"> [nocommit]
 ---
 
-You are in the **PULL** phase of ristretto. You implement exactly one ticket, directly, in auto mode — there is no approval gate. Closing the ticket is **your** job at the end, never the user's.
+You are in the **PULL** phase of ristretto. You implement exactly one feature, directly, in auto mode — there is no approval gate. Closing the feature is **your** job at the end, never the user's.
 
-Target: $ARGUMENTS  (a ticket ID, or `next` = the top `planned` row in the roadmap; add `nocommit` to skip the commit at the end)
+Target: $ARGUMENTS  (a feature ID, or `next` = the top `planned` row in the roadmap; add `nocommit` to skip the commit at the end)
 
 ## 1. Read the roadmap first — trust it
 
 Read `docs/ristretto/roadmap.md` before anything else. The roadmap is the source of truth; take it at its word. Don't scan the codebase to second-guess its status — keeping it honest is the developer's call.
 
 - If the target is already **`done`** → **stop.** Tell the user it's already implemented (cite the Updated date / any recorded commit). Do not re-implement.
-- Otherwise, proceed. The roadmap mostly stays honest on its own, because `pull` closes tickets automatically (step 6).
+- Otherwise, proceed. The roadmap mostly stays honest on its own, because `pull` closes features automatically (step 6).
 
-**Resolving `next`:** pick the top `planned` row *whose plan's `Depends:` are all `done`* — skip any ticket still waiting on an unfinished prerequisite. If every `planned` ticket is blocked, stop and say so, naming what each is waiting on. When a **specific ticket ID** was named (not `next`) and its `Depends:` aren't all done, don't silently skip — warn that a prerequisite is unfinished and ask whether to proceed anyway.
+**Resolving `next`:** pick the top `planned` row *whose plan's `Depends:` are all `done`* — skip any feature still waiting on an unfinished prerequisite. If every `planned` feature is blocked, stop and say so, naming what each is waiting on. When a **specific feature ID** was named (not `next`) and its `Depends:` aren't all done, don't silently skip — warn that a prerequisite is unfinished and ask whether to proceed anyway.
 
 ## 2. Read the plan
 
-Open `docs/ristretto/plans/<TICKET-ID>.md`. The **acceptance criteria are the contract**; the approach is guidance, not gospel.
+Open `docs/ristretto/plans/<FEATURE-ID>.md`. The **acceptance criteria are the contract**; the approach is guidance, not gospel.
 
 ## 3. Branch
 
-Work on a feature branch for the ticket:
+Work on a feature branch for the feature:
 
-- If the working tree is **clean** and you're not already on a branch for this ticket, create and switch to `feature/<TICKET-ID>`.
+- If the working tree is **clean** and you're not already on a branch for this feature, create and switch to `feature/<FEATURE-ID>`.
 - If you're already on a suitable branch, reuse it.
 - If the working tree is **dirty** or it's unclear what to branch from, **stop and ask** — never branch over uncommitted work.
 
@@ -50,9 +50,9 @@ Check the result against each acceptance criterion. If the project has a build o
 
 Once criteria are met:
 
-1. **Commit** (unless `nocommit` was passed): stage only the files you touched — never `git add -A` — and commit with a conventional message: `feat(<TICKET-ID>): <short summary>`. Record the commit hash. If `nocommit` was passed, leave the changes uncommitted in the working tree and say so; the user will commit themselves.
+1. **Commit** (unless `nocommit` was passed): stage only the files you touched — never `git add -A` — and commit with a conventional message: `feat(<FEATURE-ID>): <short summary>`. Record the commit hash. If `nocommit` was passed, leave the changes uncommitted in the working tree and say so; the user will commit themselves.
    - **Never** push, set an upstream, `--force`, amend or reset existing commits, or open a PR. Local and append-only.
-2. Move `docs/ristretto/plans/<TICKET-ID>.md` → `docs/ristretto/plans/archived/<TICKET-ID>.md`.
+2. Move `docs/ristretto/plans/<FEATURE-ID>.md` → `docs/ristretto/plans/archived/<FEATURE-ID>.md`.
 3. Update the roadmap row: status → `done`, set Updated to today, append the files touched and the commit hash (or `uncommitted` if `nocommit`).
 
 The file's location is the status. Archiving **is** closing — so it always happens here, and the user never has to remember.
@@ -67,7 +67,7 @@ Print a short summary: what changed, which criteria are satisfied, the branch an
   c[__]  ☕ shot pulled
 ```
 
-If closing this ticket left **zero** open tickets on the roadmap, celebrate instead with the full milestone cup:
+If closing this feature left **zero** open features on the roadmap, celebrate instead with the full milestone cup:
 
 ```
    ) )  ( (

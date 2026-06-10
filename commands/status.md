@@ -1,6 +1,6 @@
 ---
 description: Print the project roadmap — a read-only view of what's planned, in progress, and done. Changes nothing.
-argument-hint: [optional filter: "open", "done", or a ticket ID]
+argument-hint: [optional filter: "open", "done", or a feature ID]
 ---
 
 You are running **STATUS**. This is **read-only** — do not create, modify, archive, or implement anything.
@@ -14,12 +14,12 @@ Filter (optional): $ARGUMENTS
 4. Print the roadmap rows. If a filter was given, show only matching rows:
    - `open` → everything not `done`
    - `done` → only `done`
-   - a ticket ID → just that row
-   - a feature slug → only rows in that feature
+   - a feature ID → just that row
+   - a flight slug → only rows in that flight
 
-   If any rows carry a `Feature`, group the output by feature (standalone `—` rows last under "Other"). Within a group, a ticket still blocked by an unfinished `Depends:` prerequisite gets a small `⏳` marker so it's clear why `pull next` would skip it. Don't over-decorate — one marker, no analysis.
+   If any rows carry a `Flight`, group the output by flight (standalone `—` rows last under "Other"). Within a group, a feature still blocked by an unfinished `Depends:` prerequisite gets a small `⏳` marker so it's clear why `pull next` would skip it. Don't over-decorate — one marker, no analysis.
 5. If nothing matches the filter, say so plainly.
-6. **Milestone.** If every ticket is `done` (gauge full), replace the gauge with a full celebratory cup:
+6. **Milestone.** If every feature is `done` (gauge full), replace the gauge with a full celebratory cup:
    ```
       ) )  ( (
    .__________.

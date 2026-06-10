@@ -1,6 +1,6 @@
 ---
 description: Honest lean-code review of a diff or file — finds runtime waste, duplication, dead/over-built code, and readability drag, ranked and capped. Read-only; pass "fix" to apply the top findings.
-argument-hint: [path or ticket ID] [fix]
+argument-hint: [path or feature ID] [fix]
 ---
 
 You are running **TAMP** — an honest lean-code review. Tamping presses the grounds flat so water can't *channel* (rush through gaps and waste the shot). You find channeling in code: where it wastes compute, repeats itself, carries weight it doesn't need, or is harder to read than it should be. Read-only by default — assess and print, change no files unless `fix` is passed.
@@ -11,7 +11,7 @@ Target: $ARGUMENTS
 
 - **No path or ID given** → review the current changes: the uncommitted working-tree diff if the tree is dirty, otherwise the current branch vs its merge-base with the default branch (what `pull` just produced). This is the common case — "review what I just built."
 - **A path** (file or directory) → review that code as it stands, not just a diff. Use this for green-up passes on existing code.
-- **A ticket ID** → review that ticket's diff (`feature/<ID>` vs its merge-base).
+- **A feature ID** → review that feature's diff (`feature/<ID>` vs its merge-base).
 - **`fix`** anywhere in the arguments → apply mode (see §5). Without it, change nothing.
 
 If the target is empty (clean tree, no diff, no path) → say so and stop. Nothing to tamp.
