@@ -22,11 +22,12 @@ If `roadmap.md` is new, start it with this table:
 ```
 # Ristretto Roadmap
 
-| Ticket | Title | Status | Plan | Updated |
-|--------|-------|--------|------|---------|
+| Feature | Ticket | Title | Status | Plan | Updated |
+|---------|--------|-------|--------|------|---------|
 ```
 
 Status values: `planned` · `in-progress` · `done`.
+Feature: a short kebab slug grouping related tickets, or `—` for a standalone ticket.
 
 ## Decompose only when there's a real seam
 
@@ -47,6 +48,14 @@ When unsure, keep it whole. Before writing any plans, **print the proposed split
 - **Raw idea (no number):** mint a plain descriptive slug from the title — `login-rate-limit`, `dark-mode-toggle`. No prefix — once planned it's just a ticket, and the `Source:` line records that it began as an idea. Keep it short; it must be unique in the roadmap.
 - Record the origin in the plan's `Spec` (`Source:` line below) so a split or idea still points back to where it came from.
 
+### Feature & dependencies — record the shape, don't schedule it
+
+When inputs belong together — a split of one ticket, or several tickets serving one feature — give them a shared **Feature** slug (kebab, e.g. `dpk-detail`). A lone ticket with no siblings gets `—`. This is just a grouping label; it changes nothing about how a ticket is planned or pulled.
+
+When one resulting ticket can't start until another lands, record it with **`Depends:`** (the prerequisite ticket IDs) on the dependent plan. When two are independent and could be worked side by side, note it with **`Parallel-with:`**. Both default to `—` (no constraint). These are honest notes about the graph — `pull next` reads `Depends:` to avoid pulling a ticket whose foundation isn't built yet; `Parallel-with:` is informational. ristretto stays one-ticket-at-a-time; you're recording order, not running waves.
+
+Keep it light: only add `Depends:` where a real prerequisite exists. Most tickets depend on nothing.
+
 ## For each resulting ticket
 
 1. **Only ask if genuinely ambiguous.** If scope is clear, proceed — no mandatory brainstorm gate. If something is truly unresolvable (missing API contract, undecided UX), ask 1–2 sharp questions, then continue with the rest.
@@ -58,6 +67,7 @@ When unsure, keep it whole. Before writing any plans, **print the proposed split
 
    ## Spec
    - Source: <real ticket ID, parent ID, or "idea">
+   - Feature: <feature slug, or —>
    - Goal: one line.
    - Acceptance:
      - bullet
@@ -66,12 +76,14 @@ When unsure, keep it whole. Before writing any plans, **print the proposed split
    - Strategy in prose (a few sentences).
    - Likely touchpoints: src/... (areas for orientation, NOT exact edits)
    - Decisions / tradeoffs: ...
-   - Blockers / deps: ...
+   - Depends: <ticket IDs that must be done first, or —>
+   - Parallel-with: <ticket IDs safe to work alongside, or —>
+   - Blockers: <external blockers — missing API, undecided UX — or —>
 
    status: planned
    ```
 
-3. **Add or update one row** in `roadmap.md` for the ticket.
+3. **Add or update one row** in `roadmap.md` for the ticket — fill the `Feature` cell with its slug (or `—`).
 
 ## Hard rules
 

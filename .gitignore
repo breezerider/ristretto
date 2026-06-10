@@ -24,3 +24,4 @@ cmake-build-*/
 
 # IntelliJ build output
 out/
+.playwright-mcp

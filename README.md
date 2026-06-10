@@ -5,7 +5,7 @@ Lean ticket implementation for Claude Code. A restricted shot: less ceremony, mo
 A small set of commands following the lifecycle **review → plan → build**, plus `tamp` to keep the built code lean. The two core ones split the way you actually work — plan a stack of tickets in one sitting, implement them later as the code shifts underneath:
 
 - **`/ristretto:grind <ticket>`** — honest refinement review: plain-language summary, story-point estimate, the problems it actually has, and a Ready / Not-Ready verdict. Read-only.
-- **`/ristretto:prep <tickets | ideas>`** — turns tickets *or* raw ideas into lean *intent* plans and adds them to the project roadmap. Splits an input into sub-tickets only when there's a real seam (independent deliverables, separate "done", or too big for one sprint) — otherwise keeps it whole. Planning only, no code.
+- **`/ristretto:prep <tickets | ideas>`** — turns tickets *or* raw ideas into lean *intent* plans and adds them to the project roadmap. Splits an input into sub-tickets only when there's a real seam (independent deliverables, separate "done", or too big for one sprint) — otherwise keeps it whole. Tickets that belong together get a shared `Feature` slug, and a real prerequisite is recorded as `Depends:` so ordering is explicit. Planning only, no code.
 - **`/ristretto:pull <ticket | next>`** — implements one ticket against the *current* code, in auto mode, then closes it by archiving the plan and updating the roadmap.
 - **`/ristretto:status [filter]`** — read-only view of the roadmap: what's planned, in progress, and done. Changes nothing.
 - **`/ristretto:tamp [path | ticket | nothing]`** — honest lean-code review: finds runtime waste, duplication, dead/over-built code, and readability drag in a diff or file, ranked and capped at the few that matter. Read-only; pass `fix` to apply the top findings. The code-analogue of `grind`.
@@ -22,6 +22,7 @@ ristretto plans capture the **destination, not turn-by-turn directions**: a goal
 State lives in files, not the conversation — clearing the chat never loses it.
 
 - `roadmap.md` is the fast-read index; `pull` boots from it instead of re-scanning the repo.
+- **Feature grouping + `Depends:` give honest ordering without a scheduler** — `/ristretto:pull next` skips any ticket still waiting on an unfinished prerequisite, so you can't pull work whose foundation isn't built yet. ristretto stays one-ticket-at-a-time; the graph is recorded, not run as parallel waves.
 - **Closing is `pull`'s job, every time** — it archives the plan and flips the roadmap row automatically. You never close by hand, so "forgot to close" can't happen.
 - The roadmap is trusted as written. Keeping it honest is yours — but since closing is automatic, it stays honest with almost no effort, and it doubles as a plain-language view of what's done and what's next.
 

@@ -15,6 +15,9 @@ Filter (optional): $ARGUMENTS
    - `open` → everything not `done`
    - `done` → only `done`
    - a ticket ID → just that row
+   - a feature slug → only rows in that feature
+
+   If any rows carry a `Feature`, group the output by feature (standalone `—` rows last under "Other"). Within a group, a ticket still blocked by an unfinished `Depends:` prerequisite gets a small `⏳` marker so it's clear why `pull next` would skip it. Don't over-decorate — one marker, no analysis.
 5. If nothing matches the filter, say so plainly.
 6. **Milestone.** If every ticket is `done` (gauge full), replace the gauge with a full celebratory cup:
    ```

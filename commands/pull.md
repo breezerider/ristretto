@@ -14,6 +14,8 @@ Read `docs/ristretto/roadmap.md` before anything else. The roadmap is the source
 - If the target is already **`done`** → **stop.** Tell the user it's already implemented (cite the Updated date / any recorded commit). Do not re-implement.
 - Otherwise, proceed. The roadmap mostly stays honest on its own, because `pull` closes tickets automatically (step 6).
 
+**Resolving `next`:** pick the top `planned` row *whose plan's `Depends:` are all `done`* — skip any ticket still waiting on an unfinished prerequisite. If every `planned` ticket is blocked, stop and say so, naming what each is waiting on. When a **specific ticket ID** was named (not `next`) and its `Depends:` aren't all done, don't silently skip — warn that a prerequisite is unfinished and ask whether to proceed anyway.
+
 ## 2. Read the plan
 
 Open `docs/ristretto/plans/<TICKET-ID>.md`. The **acceptance criteria are the contract**; the approach is guidance, not gospel.
