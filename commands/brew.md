@@ -31,7 +31,7 @@ A feature is **eligible** when its status is `planned`, all its `Depends:` are `
 2. **Implement** against the current code, lean the first time: reuse before writing, smallest diff that meets the criteria, no scaffolding nothing needs yet.
 3. **Skip, never guess.** If you hit something the plan doesn't decide — a real product decision, a missing contract, a blocker the prep didn't see, or gates you cannot get green without weakening them:
    - discard the partial changes for this feature (`git restore` the files you touched — the branch must be clean for the next one),
-   - set the roadmap row to `blocked` with a one-line reason (this is the refinement queue the user walks through after the loop),
+   - set the roadmap row to `blocked` with a one-line reason **phrased as the spec gap** — name what the plan failed to decide, not what the code couldn't do ("acceptance criterion 'fast' isn't measurable — needs a number", "API error contract undefined for the 429 case"). The blocked queue is the user's refinement worklist; each entry must say exactly what refining fixes,
    - continue with the next eligible feature.
 4. **Verify & record evidence.** Transcribe the acceptance criteria into tests where the stack has a test gate — every assertion restates a criterion, never invented. Run the gates; fix until green. Evidence = how each criterion was proven (test names, output, measurements).
 5. **Close, exactly as `pull` does:** commit `feat(<FEATURE-ID>): <summary>` staging only the files you touched (never `git add -A`); append `## Evidence` (proof + gate summary) to the plan and move it to `plans/archived/`; flip the roadmap row to `done` with today's date, files touched, and the commit hash.
@@ -40,7 +40,8 @@ A feature is **eligible** when its status is `planned`, all its `Depends:` are `
 ## After the loop
 
 1. **Disarm the gates:** delete `.ristretto/pulling` and `.ristretto/gate-retries` if present. Do this even if the loop aborts.
-2. **Report:** features brewed (with commit hashes), features `blocked` (each with its reason — suggest refining them and re-running), and the branch name. If you noticed adjacent problems while working, list them as *suggestions* at the end — do not add them to the roadmap and do not fix them.
+2. **Report:** features brewed (with commit hashes), features `blocked` (each with its spec gap — suggest refining them and re-running), and the branch name. If you noticed adjacent problems while working, list them as *suggestions* at the end — do not add them to the roadmap and do not fix them.
+   **Tasting note — reward the specs, honestly:** if every eligible feature brewed with zero blocks, lead the report with `☕ perfectly dialed in — every spec held end to end.` That's the payoff for doing refinement properly; never print it when anything blocked.
 3. If the roadmap is now fully `done`, end with the milestone cup:
 
    ```

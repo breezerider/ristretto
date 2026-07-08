@@ -61,7 +61,13 @@ Keep it light: only add `Depends:` where a real prerequisite exists. Most featur
 
 1. **Only ask if genuinely ambiguous.** If scope is clear, proceed — no mandatory brainstorm gate. If something is truly unresolvable (missing API contract, undecided UX), ask 1–2 sharp questions, then continue with the rest.
 
-2. **Write `docs/ristretto/plans/<FEATURE-ID>.md`** as a *lean intent plan*:
+2. **Make every acceptance criterion checkable** — by a test, a measurement, or a binary observation. This is the contract `pull` and `brew` are held to; a vague criterion makes the gates meaningless.
+   - ✗ "improve the list" → ✓ "list renders 500 items in <100ms"
+   - ✗ "better error handling" → ✓ "every failed API call shows a retry action within 1s"
+
+   Push back **once** on a vague input, offering a sharpened version to confirm. If a criterion can't be made checkable with what you and the user know right now, record the gap in `Blockers:` — `brew` will skip the feature, and the blocked row names exactly what refinement is missing. Never write an unmeasurable criterion, and never invent one the user didn't confirm.
+
+3. **Write `docs/ristretto/plans/<FEATURE-ID>.md`** as a *lean intent plan*:
 
    ```
    # <FEATURE-ID> — <title>
@@ -84,7 +90,7 @@ Keep it light: only add `Depends:` where a real prerequisite exists. Most featur
    status: planned
    ```
 
-3. **Add or update one row** in `roadmap.md` for the feature — fill the `Flight` cell with its slug (or `—`).
+4. **Add or update one row** in `roadmap.md` for the feature — fill the `Flight` cell with its slug (or `—`).
 
 ## Hard rules
 
