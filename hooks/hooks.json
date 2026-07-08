@@ -1,5 +1,5 @@
 {
-  "description": "ristretto deterministic gates: per-file format after Write/Edit (never blocks), full lint+typecheck+test gate on Stop while a pull is active (blocks with exit 2).",
+  "description": "ristretto deterministic gates: per-file format after Write/Edit (never blocks), full lint+typecheck+test gate on Stop and SubagentStop while a pull is active (blocks with exit 2). SubagentStop gates brew's per-feature subagents individually.",
   "hooks": {
     "PostToolUse": [
       {
@@ -22,6 +22,18 @@
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/gate.js\" full",
             "timeout": 600,
             "statusMessage": "ristretto: running gates (lint, typecheck, test)..."
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/gate.js\" full",
+            "timeout": 600,
+            "statusMessage": "ristretto: running gates on subagent result..."
           }
         ]
       }

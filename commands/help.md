@@ -18,6 +18,8 @@ THE WORKFLOW
   3. /ristretto:brew                brew the whole pot: implements every
                                     eligible feature unattended, one gated
                                     commit each, on feature/brew-<date>.
+                                    each feature runs in a fresh subagent —
+                                    the main context stays lean, batches scale.
                                     ambiguity → status "blocked", never a guess.
      …or /ristretto:pull <ID|next>  pull exactly one feature, human between shots.
   4. /ristretto:status blocked      your refinement queue after a brew —
