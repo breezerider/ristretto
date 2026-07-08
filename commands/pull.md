@@ -20,7 +20,28 @@ Read `docs/ristretto/roadmap.md` before anything else. The roadmap is the source
 
 Open `docs/ristretto/plans/<FEATURE-ID>.md`. The **acceptance criteria are the contract**; the approach is guidance, not gospel.
 
-## 3. Branch
+## 3. Arm the gates
+
+The plugin ships deterministic gate hooks: while a pull is active, a Stop hook runs the repo's lint + typecheck + test and blocks you (exit 2) until they're green — enforced, not self-reported.
+
+1. **If `.ristretto.json` is missing at the repo root, create it now.** Detect the stack (`angular.json` → Angular, `next.config.*` → Next.js, `pubspec.yaml` → Flutter; otherwise read `package.json` scripts) and write the resolved commands — adopt whatever format/lint/typecheck/test tooling the repo already uses (read its existing config), never impose new tools. Leave a gate as `""` only if the repo genuinely has no such tool; empty gates are skipped.
+
+   ```json
+   {
+     "gates": {
+       "format": "npx prettier --write {file}",
+       "lint": "npx eslint .",
+       "typecheck": "npx tsc --noEmit",
+       "test": "npx vitest run"
+     }
+   }
+   ```
+
+   `{file}` is replaced with the touched file (format only; the other gates run repo-wide). `.ristretto.json` belongs in git; also add `.ristretto/` (transient state) to `.gitignore` if it isn't there.
+
+2. **Create the marker file `.ristretto/pulling`** (empty). This arms the Stop gate for the duration of the pull. The gates are infrastructure, not suggestions: never weaken, skip, or delete gates or tests to get green — a red gate means the work is not done.
+
+## 4. Branch
 
 Work on a feature branch for the feature:
 
@@ -30,7 +51,7 @@ Work on a feature branch for the feature:
 
 Never push, never set an upstream.
 
-## 4. Implement against the *current* code
+## 5. Implement against the *current* code
 
 The plan deliberately contains no code, and the repo has likely shifted since prep. So:
 
@@ -42,18 +63,21 @@ The plan deliberately contains no code, and the repo has likely shifted since pr
 - **No waste in the code you write**: no N+1 or recomputation that could be hoisted, no copy-pasted logic, no scaffolding or abstraction nothing needs yet (YAGNI).
 - **No waste in how you work**: don't re-read files already in context, don't restate the plan, targeted edits over rewrites — the smallest diff that meets the acceptance criteria.
 
-## 5. Verify
+## 6. Verify & record evidence
 
-Check the result against each acceptance criterion. If the project has a build or tests, run them. Fix until the criteria are met.
+Check the result against each acceptance criterion. If the project has a test gate, cover the criteria with tests — **transcribe, don't invent**: every assertion must restate an acceptance criterion. If the AI decides what "correct" means, the loop is broken. Run the gates yourself; fix until green.
 
-## 6. Close — mandatory, automatic
+Then write down the **Evidence**: for each criterion, *how* it was proven — test names, command output, measurements. "Implemented successfully" is not evidence.
+
+## 7. Close — mandatory, automatic
 
 Once criteria are met:
 
 1. **Commit** (unless `nocommit` was passed): stage only the files you touched — never `git add -A` — and commit with a conventional message: `feat(<FEATURE-ID>): <short summary>`. Record the commit hash. If `nocommit` was passed, leave the changes uncommitted in the working tree and say so; the user will commit themselves.
    - **Never** push, set an upstream, `--force`, amend or reset existing commits, or open a PR. Local and append-only.
-2. Move `docs/ristretto/plans/<FEATURE-ID>.md` → `docs/ristretto/plans/archived/<FEATURE-ID>.md`.
+2. Append an `## Evidence` section to the plan (the proof from step 6, plus a one-line gate summary like `gates: lint ✓ typecheck ✓ test ✓`), then move `docs/ristretto/plans/<FEATURE-ID>.md` → `docs/ristretto/plans/archived/<FEATURE-ID>.md`.
 3. Update the roadmap row: status → `done`, set Updated to today, append the files touched and the commit hash (or `uncommitted` if `nocommit`).
+4. **Disarm the gates:** delete `.ristretto/pulling` (and `.ristretto/gate-retries` if present). Do this even when a pull is aborted midway — a stale marker keeps gating sessions that aren't pulls.
 
 The file's location is the status. Archiving **is** closing — so it always happens here, and the user never has to remember.
 

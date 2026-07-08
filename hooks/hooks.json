@@ -1,0 +1,30 @@
+{
+  "description": "ristretto deterministic gates: per-file format after Write/Edit (never blocks), full lint+typecheck+test gate on Stop while a pull is active (blocks with exit 2).",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/gate.js\" quick",
+            "timeout": 30,
+            "statusMessage": "ristretto: formatting..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/gate.js\" full",
+            "timeout": 600,
+            "statusMessage": "ristretto: running gates (lint, typecheck, test)..."
+          }
+        ]
+      }
+    ]
+  }
+}

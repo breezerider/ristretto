@@ -26,6 +26,18 @@ State lives in files, not the conversation — clearing the chat never loses it.
 - **Closing is `pull`'s job, every time** — it archives the plan and flips the roadmap row automatically. You never close by hand, so "forgot to close" can't happen.
 - The roadmap is trusted as written. Keeping it honest is yours — but since closing is automatic, it stays honest with almost no effort, and it doubles as a plain-language view of what's done and what's next.
 
+## Deterministic gates, not vibes
+
+`pull` and `shot` don't self-report "tests pass" — the plugin ships hooks that enforce it:
+
+- On the first pull in a repo, a `.ristretto.json` is created at the root with the repo's own `format` / `lint` / `typecheck` / `test` commands (stack auto-detected; existing tooling adopted, never replaced). Commit it.
+- While a pull is active (marker file `.ristretto/pulling`), a **Stop hook** runs lint + typecheck + test and blocks the agent (exit 2) until they're green. Red gate = not done — the agent can't rationalize past it, and it's instructed never to weaken or delete gates or tests to get there. After 3 forced retries it surfaces the failure to you instead of looping.
+- A **PostToolUse hook** formats each touched file as the agent writes — a convenience that never blocks.
+- Outside a pull, the hooks exit immediately: no nagging in casual sessions, and repos without a `.ristretto.json` are never touched.
+- Closing a feature now also records **Evidence** in the archived plan: how each acceptance criterion was proven — test names, output, measurements. "Implemented successfully" is not evidence.
+
+The gate runner is plain Node (`scripts/gate.js`) — no bash, no jq — so it works the same on Windows, macOS, and Linux. Check it with `node scripts/gate.test.js`.
+
 ## Git: branch & commit, never push
 
 `pull` and `shot` handle git for you, with one firm boundary — **they never push.**
@@ -48,6 +60,8 @@ The coffee metaphor carries real signal, not just decoration — and nothing ani
 ## Layout it generates (per project)
 
 ```
+.ristretto.json         # gate commands for this repo (committed)
+.ristretto/             # transient pull state — marker & retry counter (gitignored)
 docs/ristretto/
   roadmap.md            # always-current index of every feature
   plans/
