@@ -10,10 +10,11 @@ Filter (optional): $ARGUMENTS
 1. Read `docs/ristretto/roadmap.md`. If it doesn't exist, tell the user there's no roadmap yet and to run `/ristretto:prep` to start one, then stop.
 2. **Brew gauge.** Lead with a 10-segment gauge of done / total, filled proportionally (round to nearest segment), e.g.:
    `☕ [█████░░░░░] 5/10 brewed`
-3. Print a one-line count summary: planned / in-progress / done.
+3. Print a one-line count summary: planned / in-progress / blocked / done.
 4. Print the roadmap rows. If a filter was given, show only matching rows:
    - `open` → everything not `done`
    - `done` → only `done`
+   - `blocked` → only `blocked`, each with its recorded reason — this is the refinement queue after a `brew` run
    - a feature ID → just that row
    - a flight slug → only rows in that flight
 

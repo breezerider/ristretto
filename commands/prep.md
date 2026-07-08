@@ -26,7 +26,8 @@ If `roadmap.md` is new, start it with this table:
 |--------|---------|-------|--------|------|---------|
 ```
 
-Status values: `planned` · `in-progress` · `done`.
+Status values: `planned` · `in-progress` · `blocked` · `done`.
+`blocked` is set by `pull`/`brew` when a feature can't proceed without a decision — the row carries a one-line reason. Re-prepping a `blocked` feature (refining its plan to resolve the reason) flips it back to `planned`.
 Flight: a short kebab slug grouping related features, or `—` for a standalone feature.
 
 ## Decompose only when there's a real seam

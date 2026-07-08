@@ -14,6 +14,8 @@ Read `docs/ristretto/roadmap.md` before anything else. The roadmap is the source
 - If the target is already **`done`** → **stop.** Tell the user it's already implemented (cite the Updated date / any recorded commit). Do not re-implement.
 - Otherwise, proceed. The roadmap mostly stays honest on its own, because `pull` closes features automatically (step 6).
 
+- If the target is **`blocked`**, surface the recorded reason and ask whether to proceed anyway — the block may have been resolved outside the roadmap.
+
 **Resolving `next`:** pick the top `planned` row *whose plan's `Depends:` are all `done`* — skip any feature still waiting on an unfinished prerequisite. If every `planned` feature is blocked, stop and say so, naming what each is waiting on. When a **specific feature ID** was named (not `next`) and its `Depends:` aren't all done, don't silently skip — warn that a prerequisite is unfinished and ask whether to proceed anyway.
 
 ## 2. Read the plan
