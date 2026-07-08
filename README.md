@@ -9,6 +9,7 @@ A small set of commands following the lifecycle **review → plan → build**, p
 - **`/ristretto:pull <feature | next>`** — implements one feature against the *current* code, in auto mode, then closes it by archiving the plan and updating the roadmap.
 - **`/ristretto:brew`** — brew the whole pot: autonomously pulls every eligible planned feature in sequence — same gates, evidence, and close as `pull`, one commit per feature on a single `feature/brew-<date>` session branch. Anything needing a decision gets status `blocked` with a one-line reason instead of a guess; you walk through `status blocked` afterward, refine, and re-brew. For when you've prepped a batch and don't want to babysit the roadmap.
 - **`/ristretto:status [filter]`** — read-only view of the roadmap: what's planned, in progress, and done. Changes nothing.
+- **`/ristretto:help`** — the menu: every command, the workflow, and the house rules as a CLI-style card. Read-only, instant.
 - **`/ristretto:tamp [path | feature | nothing]`** — honest lean-code review: finds runtime waste, duplication, dead/over-built code, and readability drag in a diff or file, ranked and capped at the few that matter. Read-only; pass `fix` to apply the top findings. The code-analogue of `grind`.
 - **`/ristretto:shot <feature>`** — prep + pull one small feature in a single pass, for trivial cases where the split is overkill. Same spec standard as `prep`, not a bypass lane: if it can't state checkable acceptance criteria on the spot, it stops and routes to `prep`.
 
@@ -97,6 +98,7 @@ To share with the team, push this folder to a Git repo and `/plugin marketplace 
 /ristretto:tamp                               # review the changes I just made
 /ristretto:tamp src/auth                      # green-up pass on existing code
 /ristretto:tamp BREW-224 fix                  # review a feature's diff and apply the top fixes
+/ristretto:help                              # the menu — commands, workflow, house rules
 ```
 
 Runs entirely in auto mode — no plan-mode switching.
