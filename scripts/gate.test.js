@@ -76,4 +76,45 @@ r = gate(dir, 'quick', JSON.stringify({ tool_input: { file_path: touched } }));
 assert.strictEqual(r.status, 0, 'quick must exit 0');
 assert.ok(fs.existsSync(touched + '.formatted'), 'format command must receive the touched file');
 
+// --- Fingerprint cache: an unchanged green tree must not re-run the gates. ---
+// COUNT appends one char to ./count per gate invocation, so the file length counts runs.
+const COUNT = `node -e "require('fs').appendFileSync('count', 'x')"`;
+const runs = (d) => { try { return fs.readFileSync(path.join(d, 'count'), 'utf8').length; } catch { return 0; } };
+
+function gitTmpRepo(config) {
+  const d = tmpRepo(config);
+  fs.writeFileSync(path.join(d, '.gitignore'), '.ristretto/\n');
+  fs.writeFileSync(path.join(d, 'src.txt'), 'v1');
+  const g = (args) => spawnSync('git', args, { cwd: d, encoding: 'utf8' });
+  g(['init', '-q']);
+  g(['add', '-A']);
+  g(['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'init']);
+  return d;
+}
+
+// 8. Green run stores a fingerprint; identical tree → gates skipped on the next run.
+dir = gitTmpRepo(JSON.stringify({ gates: { test: COUNT } }));
+arm(dir);
+assert.strictEqual(gate(dir, 'full').status, 0, 'green gates must exit 0 (git repo)');
+assert.strictEqual(runs(dir), 1, 'first green run must execute the gates');
+assert.strictEqual(gate(dir, 'full').status, 0, 'unchanged tree must exit 0');
+assert.strictEqual(runs(dir), 1, 'unchanged tree must NOT re-run the gates');
+
+// 9. Any tree change invalidates the fingerprint → gates run again.
+fs.writeFileSync(path.join(dir, 'src.txt'), 'v2');
+assert.strictEqual(gate(dir, 'full').status, 0, 'changed tree must exit 0 when green');
+assert.strictEqual(runs(dir), 2, 'changed tree must re-run the gates');
+
+// 10. Same file names, different content → still a cache miss (content is hashed, not just paths).
+fs.writeFileSync(path.join(dir, 'src.txt'), 'v3');
+assert.strictEqual(gate(dir, 'full').status, 0);
+assert.strictEqual(runs(dir), 3, 'content-only change must re-run the gates');
+
+// 11. Outside a git repo there is no caching — gates always run (safe fallback).
+dir = tmpRepo(JSON.stringify({ gates: { test: COUNT } }));
+arm(dir);
+gate(dir, 'full');
+gate(dir, 'full');
+assert.strictEqual(runs(dir), 2, 'non-git repo must run the gates every time');
+
 console.log('gate.test.js: all checks passed');

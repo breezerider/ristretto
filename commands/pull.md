@@ -12,7 +12,7 @@ Target: $ARGUMENTS  (a feature ID, or `next` = the top `planned` row in the road
 Read `docs/ristretto/roadmap.md` before anything else. The roadmap is the source of truth; take it at its word. Don't scan the codebase to second-guess its status — keeping it honest is the developer's call.
 
 - If the target is already **`done`** → **stop.** Tell the user it's already implemented (cite the Updated date / any recorded commit). Do not re-implement.
-- Otherwise, proceed. The roadmap mostly stays honest on its own, because `pull` closes features automatically (step 6).
+- Otherwise, proceed. The roadmap mostly stays honest on its own, because `pull` closes features automatically (step 9).
 
 - If the target is **`blocked`**, surface the recorded reason and ask whether to proceed anyway — the block may have been resolved outside the roadmap.
 
@@ -53,31 +53,62 @@ Work on a feature branch for the feature:
 
 Never push, never set an upstream.
 
-## 5. Implement against the *current* code
+## 5. Write the contract as tests — red first
+
+If the repo has a test gate, the acceptance criteria become tests **before any implementation**:
+
+- **Transcribe, don't invent**: every assertion restates an acceptance criterion. If the AI decides what "correct" means, the loop is broken.
+- **Run them and confirm they fail.** The red run is the proof that the tests actually test something. A test that passes before implementation proves nothing — rewrite it; if the criterion is genuinely already met by the current code, say so and investigate before continuing.
+- Criteria that aren't test-checkable (measurements, binary observations) are exempt — they're proven in step 7. No test gate in `.ristretto.json` → skip this step entirely.
+
+## 6. Implement against the *current* code
 
 The plan deliberately contains no code, and the repo has likely shifted since prep. So:
 
 - Read the current code in the touchpoint areas fresh. Reuse existing patterns and utilities.
-- Implement to satisfy the acceptance criteria, following the approach where it still fits.
+- Implement to satisfy the acceptance criteria, following the approach where it still fits. You're done implementing when the red tests from step 5 pass.
 
 **Efficiency (the whole point of ristretto) — write it lean the first time:**
 - **Reuse before writing**: before adding code, check the repo for an existing utility or pattern that already does the job. Reusing is the cheapest way to avoid duplication — `tamp` catching it later costs more than not writing it.
 - **No waste in the code you write**: no N+1 or recomputation that could be hoisted, no copy-pasted logic, no scaffolding or abstraction nothing needs yet (YAGNI).
 - **No waste in how you work**: don't re-read files already in context, don't restate the plan, targeted edits over rewrites — the smallest diff that meets the acceptance criteria.
 
-## 6. Verify & record evidence
+## 7. Verify & record evidence
 
-Check the result against each acceptance criterion. If the project has a test gate, cover the criteria with tests — **transcribe, don't invent**: every assertion must restate an acceptance criterion. If the AI decides what "correct" means, the loop is broken. Run the gates yourself; fix until green.
+Check the result against each acceptance criterion. Run the gates yourself; fix until green.
 
-Then write down the **Evidence**: for each criterion, *how* it was proven — test names, command output, measurements. "Implemented successfully" is not evidence.
+Then write down the **Evidence**: for each criterion, *how* it was proven — test names, command output, measurements — including **red→green**: which tests failed before implementation and pass now. "Implemented successfully" is not evidence.
 
-## 7. Close — mandatory, automatic
+## 8. Review gate — independent, before any commit
+
+Gates prove the tests pass; they can't prove the code is right or lean. Before committing, the diff gets an **independent review** by a fresh subagent that never saw your implementation reasoning.
+
+**Skip only when the diff is trivial**: roughly < 15 changed lines *and* no new logic (no new functions, branches, or loops — renames, copy, config tweaks). When in doubt, review.
+
+Dispatch one subagent (general-purpose, fresh context) with this brief verbatim, filling in the ID and the diff scope:
+
+> You are the independent REVIEW gate for ristretto feature **<FEATURE-ID>**. You did not write this code — judge it cold. Read `docs/ristretto/plans/<FEATURE-ID>.md` (the acceptance criteria are the contract) and the feature's diff: <files touched / branch vs merge-base>. You change no files.
+>
+> Two lenses, priority order:
+> 1. **`bug`** — a criterion not actually satisfied, unhandled edge cases on the changed paths, logic errors the gates can't catch, tests that don't honestly restate a criterion.
+> 2. **`lean`** — tamp's facets: runtime waste (N+1, hoistable work), duplication vs utilities that already exist in this repo, dead/over-built code, readability drag.
+>
+> Report at most **7 findings**, bugs first, each one line: `bug|lean · file:line · what's wrong · the fix`. Flag only what you can point at — no hypotheticals, no style nits. If nothing material, your final message is exactly `review: clean`. Otherwise: `review: N findings` followed by the findings. Nothing else.
+
+Then act on the verdict — **capped at 2 rounds, never a ping-pong**:
+
+- **`review: clean`** → proceed to close.
+- **Findings** → fix **every `bug`** (mandatory); fix `lean` findings unless the fix is riskier than the win (state what you left in the summary). Re-run the gates.
+- **Round 2** (only if round 1 found bugs): dispatch a fresh reviewer to *verify the prior findings and any defect introduced by the fixes* — not to open new lean fronts.
+- **Bugs still open after round 2** → hard stop, mirroring the gate-retry rule: do **not** commit. Surface the findings to the user, leave the branch as it is, and disarm the gates (step 9.4).
+
+## 9. Close — mandatory, automatic
 
 Once criteria are met:
 
 1. **Commit** (unless `nocommit` was passed): stage only the files you touched — never `git add -A` — and commit with a conventional message: `feat(<FEATURE-ID>): <short summary>`. Record the commit hash. If `nocommit` was passed, leave the changes uncommitted in the working tree and say so; the user will commit themselves.
    - **Never** push, set an upstream, `--force`, amend or reset existing commits, or open a PR. Local and append-only.
-2. Append an `## Evidence` section to the plan (the proof from step 6, plus a one-line gate summary like `gates: lint ✓ typecheck ✓ test ✓`), then move `docs/ristretto/plans/<FEATURE-ID>.md` → `docs/ristretto/plans/archived/<FEATURE-ID>.md`.
+2. Append an `## Evidence` section to the plan (the proof from step 7, a one-line gate summary like `gates: lint ✓ typecheck ✓ test ✓`, and the review verdict — `review: clean`, `review: N findings resolved`, or `review: skipped (trivial diff)`), then move `docs/ristretto/plans/<FEATURE-ID>.md` → `docs/ristretto/plans/archived/<FEATURE-ID>.md`.
 3. Update the roadmap row: status → `done`, set Updated to today, append the files touched and the commit hash (or `uncommitted` if `nocommit`).
 4. **Disarm the gates:** delete `.ristretto/pulling` (and `.ristretto/gate-retries` if present). Do this even when a pull is aborted midway — a stale marker keeps gating sessions that aren't pulls.
 
@@ -85,7 +116,7 @@ The file's location is the status. Archiving **is** closing — so it always hap
 
 ## When done
 
-Print a short summary: what changed, which criteria are satisfied, the branch and commit (or that it's left uncommitted), and confirm the plan was archived and the roadmap updated. If the diff was non-trivial, you may add a single optional line suggesting `/ristretto:tamp` for a lean-code pass — never more than one line, and skip it for tiny diffs. End with a little cup:
+Print a short summary: what changed, which criteria are satisfied, the review verdict (including any `lean` findings deliberately left), the branch and commit (or that it's left uncommitted), and confirm the plan was archived and the roadmap updated. End with a little cup:
 
 ```
   ( (

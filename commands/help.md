@@ -38,9 +38,14 @@ THE REST OF THE MENU
 
 HOUSE RULES
   • specs first — nothing is built that isn't planned with checkable criteria.
+  • tests first — acceptance criteria become failing tests before any
+    implementation. red proves the test tests something; then code to green.
   • deterministic gates — while implementing, a Stop hook runs your repo's
     lint + typecheck + test (.ristretto.json) and blocks until green.
     enforced, not self-reported. evidence is recorded, not claimed.
+  • independent review — before any commit, a fresh subagent that never saw
+    the implementation judges the diff (bugs first, then lean). bugs must be
+    fixed; 2 rounds max, then it surfaces instead of looping. trivial diffs skip.
   • skip, never guess — undecidable → blocked with the spec gap named.
   • git: feature branches, one commit per feature, NEVER pushes. reviewing
     and pushing is yours.
