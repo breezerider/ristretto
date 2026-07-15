@@ -25,3 +25,6 @@ cmake-build-*/
 # IntelliJ build output
 out/
 .playwright-mcp
+
+# Local working notes (superpowers specs/plans) — not part of the plugin
+docs/
