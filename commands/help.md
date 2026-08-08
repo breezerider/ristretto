@@ -11,15 +11,18 @@ You are running **HELP**. Do **no** work — no file reads, no git, no roadmap, 
 THE WORKFLOW
   1. /ristretto:grind <feature>     honest refinement review — story points,
                                     problems, Ready / Not-Ready. read-only.
-  2. /ristretto:prep <features>     batch-plan into lean intent plans. every
-                                    acceptance criterion must be checkable
-                                    (test, measurement, or binary observation)
-                                    — what can't be, becomes a Blocker.
+  2. /ristretto:prep <features>     batch-plan into a durable ## Contract
+     …or /ristretto:prep <f> deep   (checkable criteria, Provides/Consumes,
+                                    decisions, seams) + a one-screen ## Approach.
+                                    fast by default; escalates into grill mode
+                                    when a criterion can't be made checkable.
+                                    "deep" forces the grill.
   3. /ristretto:brew                brew the whole pot: implements every
                                     eligible feature unattended, one gated
                                     commit each, on feature/brew-<date>.
-                                    each feature runs in a fresh subagent —
-                                    the main context stays lean, batches scale.
+                                    planner → implementer → reviewer → closer,
+                                    each a fresh subagent — the main context
+                                    stays lean, batches scale.
                                     ambiguity → status "blocked", never a guess.
      …or /ristretto:pull <ID|next>  pull exactly one feature, human between shots.
   4. /ristretto:status blocked      your refinement queue after a brew —
@@ -29,7 +32,7 @@ THE WORKFLOW
 THE REST OF THE MENU
   /ristretto:shot <feature>         prep + pull one trivial feature in one pass.
                                     same spec standard — no checkable criteria
-                                    on the spot → it routes you to prep.
+                                    or no Provides: on the spot → routes to prep.
   /ristretto:status [filter]        roadmap view: gauge + rows.
                                     filters: open | done | blocked | ID | flight
   /ristretto:tamp [target] [fix]    lean-code review of a diff/file: waste,
@@ -38,14 +41,18 @@ THE REST OF THE MENU
 
 HOUSE RULES
   • specs first — nothing is built that isn't planned with checkable criteria.
-  • tests first — acceptance criteria become failing tests before any
+  • the plan splits in two — the ## Contract is durable and deep; the
+    directions are generated against HEAD at pull time into
+    .ristretto/build/<ID>.md and deleted at close. neither can rot.
+  • tests first — the build plan's test cases become failing tests before any
     implementation. red proves the test tests something; then code to green.
   • deterministic gates — while implementing, a Stop hook runs your repo's
     lint + typecheck + test (.ristretto.json) and blocks until green.
     enforced, not self-reported. evidence is recorded, not claimed.
   • independent review — before any commit, a fresh subagent that never saw
     the implementation judges the diff (bugs first, then lean). bugs must be
-    fixed; 2 rounds max, then it surfaces instead of looping. trivial diffs skip.
+    fixed; 2 rounds (brew gets a 3rd on a stronger model), then it surfaces
+    instead of looping. trivial diffs skip.
   • skip, never guess — undecidable → blocked with the spec gap named.
   • git: feature branches, one commit per feature, NEVER pushes. reviewing
     and pushing is yours.

@@ -27,7 +27,7 @@ This is the whole point of the command. Don't rubber-stamp. Call out vague accep
 
 **Verdict — Ready / Not Ready**
 - *Ready*: clear goal, at least 2–3 meaningful ACs, no blocking unknowns, dependencies identified, fits one sprint (≤ 13).
-- *Not Ready*: list the questions to ask in refinement and what has to change to reach Ready.
+- *Not Ready*: list the questions to ask in refinement and what has to change to reach Ready. **Name the specific `Contract` fields that can't be filled yet** — `Acceptance` (no checkable criterion), `Provides` (the public surface isn't decided), `Decisions` (an open ruling) — so the output drops straight into `/ristretto:prep <feature> deep` as an agenda.
 
 Acknowledge what was given versus what you inferred, and flag any inferred acceptance criteria as inferred.
 
