@@ -97,7 +97,7 @@ Keep it light: only add `Depends:` where a real prerequisite exists. Most featur
        `sendOtp(phone: string): Promise<OtpToken>` — or — >
    - Consumes: <surface from Depends: features this one calls, same form, or — >
    - Decisions: <resolved question -> the ruling, one line each>
-   - Seams: <the 2-6 units of work inside this feature, one line each, or — >
+   - Units: <the 2-6 units of work inside this feature, one line each, or — >
    - Blockers: <what could not be made checkable -> who/what can answer, or — >
 
    ## Approach
@@ -109,9 +109,13 @@ Keep it light: only add `Depends:` where a real prerequisite exists. Most featur
    status: planned
    ```
 
-4. **Check `Consumes:` against `Provides:`.** When feature B lists A in `Depends:`, B's `Consumes:` must be a subset of A's `Provides:`. Check this at prep time and say so if it isn't — a mismatch here is the cheapest bug you will ever fix. Read A's plan wherever it lives, `plans/` or `plans/archived/`.
+4. **Fill `Units:` whenever the feature needs more than one red→green cycle** — 2–6 lines, each an independently testable deliverable inside this one feature. Only a genuinely single-cycle feature gets `—`.
 
-5. **Add or update one row** in `roadmap.md` for the feature — fill the `Flight` cell with its slug (or `—`).
+   **This is the opposite default from "Decompose only when there's a real seam" above, and the two must not be confused.** Splitting one input into several *roadmap features* is discouraged — it multiplies git-tracking IDs. Naming the *units of work inside one feature* is encouraged and costs nothing: same ID, same plan, same branch, same commit. `Units:` is what `pull`'s planner expands into per-unit file paths, signatures, and tests; a feature that arrives with `Units: —` when it plainly has several is the single most common cause of a thin build plan and inaccurate code.
+
+5. **Check `Consumes:` against `Provides:`.** When feature B lists A in `Depends:`, B's `Consumes:` must be a subset of A's `Provides:`. Check this at prep time and say so if it isn't — a mismatch here is the cheapest bug you will ever fix. Read A's plan wherever it lives, `plans/` or `plans/archived/`.
+
+6. **Add or update one row** in `roadmap.md` for the feature — fill the `Flight` cell with its slug (or `—`).
 
 ## Hard rules
 

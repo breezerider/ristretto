@@ -13,7 +13,7 @@ THE WORKFLOW
                                     problems, Ready / Not-Ready. read-only.
   2. /ristretto:prep <features>     batch-plan into a durable ## Contract
      …or /ristretto:prep <f> deep   (checkable criteria, Provides/Consumes,
-                                    decisions, seams) + a one-screen ## Approach.
+                                    decisions, units) + a one-screen ## Approach.
                                     fast by default; escalates into grill mode
                                     when a criterion can't be made checkable.
                                     "deep" forces the grill.

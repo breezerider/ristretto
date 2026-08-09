@@ -20,7 +20,7 @@ Read `docs/ristretto/roadmap.md` before anything else. The roadmap is the source
 
 ## 2. Read the plan
 
-Open `docs/ristretto/plans/<FEATURE-ID>.md`. **`## Contract` is binding** — acceptance criteria, `Provides:`/`Consumes:`, decisions, seams. `## Approach` is guidance, not gospel; it was written before the code moved.
+Open `docs/ristretto/plans/<FEATURE-ID>.md`. **`## Contract` is binding** — acceptance criteria, `Provides:`/`Consumes:`, decisions, units. `## Approach` is guidance, not gospel; it was written before the code moved.
 
 ## 3. Arm the gates
 
@@ -41,7 +41,7 @@ The plugin ships deterministic gate hooks: while a pull is active, a Stop hook r
 
    `{file}` is replaced with the touched file (format only; the other gates run repo-wide). `.ristretto.json` belongs in git; also add `.ristretto/` (transient state) to `.gitignore` if it isn't there.
 
-2. **Create the marker file `.ristretto/pulling`** (empty). This arms the Stop gate for the duration of the pull. The gates are infrastructure, not suggestions: never weaken, skip, or delete gates or tests to get green — a red gate means the work is not done.
+2. **Create the marker file `.ristretto/pulling`** (empty), and `.ristretto/build/` if it doesn't exist. The marker arms the Stop gate for the duration of the pull. The gates are infrastructure, not suggestions: never weaken, skip, or delete gates or tests to get green — a red gate means the work is not done.
 
 ## 4. Branch
 
@@ -64,12 +64,12 @@ Dispatch one **planner** subagent (fresh context, capable model) with this brief
 > 1. Read `docs/ristretto/plans/<FEATURE-ID>.md`. `## Contract` is binding; `## Approach` is guidance that may be stale.
 > 2. For every ID in `Depends:`, read that feature's archived plan and take its `Provides:` as fact — those signatures exist, use them verbatim.
 > 3. Read the current code in the touchpoint areas. Find the existing utilities, patterns, and test conventions this repo already uses. What you find beats what the Approach says.
-> 4. Write `.ristretto/build/<FEATURE-ID>.md`: for each seam in `Contract.Seams` (or the whole feature if `Seams` is `—`) — exact file paths to create or modify, the real function/type names and signatures each seam produces and consumes, and the test cases that prove each acceptance criterion, as actual test code in this repo's test style.
-> 5. **No placeholders.** No "TBD", no "add error handling", no "similar to the above", no reference to a type or function no seam defines. Any of these means the plan is not finished.
+> 4. Write `.ristretto/build/<FEATURE-ID>.md`: for each unit in `Contract.Units` (or the whole feature if `Units` is `—`) — exact file paths to create or modify, the real function/type names and signatures each unit produces and consumes, and the test cases that prove each acceptance criterion, as actual test code in this repo's test style.
+> 5. **No placeholders.** No "TBD", no "add error handling", no "similar to the above", no reference to a type or function no unit defines. Any of these means the plan is not finished.
 > 6. If the Contract cannot be satisfied against the current code — a criterion contradicts what's there, a `Consumes:` signature doesn't exist, a decision was never made — do **not** guess. Write nothing and return `blocked`.
 >
 > Final message, exactly one of:
-> `planned: <FEATURE-ID> — <n> seams, <n> tests`
+> `planned: <FEATURE-ID> — <n> units, <n> tests`
 > `blocked: <FEATURE-ID> — <the spec gap, phrased as what the plan failed to decide>`
 > Nothing else.
 

@@ -22,8 +22,19 @@ You are running **BREW** — an autonomous loop over the roadmap. The user batch
    ```
 
    plus one short barista quip, and — if features exist but all are blocked — a line naming what's blocked and why.
-3. **Arm the gates**, exactly as in `pull`: create `.ristretto.json` if missing (detect the stack, adopt the repo's existing format/lint/typecheck/test tooling, add `.ristretto/` to `.gitignore`), then create the marker `.ristretto/pulling`. It stays armed for the whole loop — the plugin's Stop **and SubagentStop** hooks run lint + typecheck + test while it exists, so every per-feature subagent is gated individually; a subagent cannot return "done" with red gates. (The gate runner fingerprints a green tree and skips re-running on an unchanged one, so read-only subagents — reviewers, closers — don't pay a full test run at every stop.)
-4. **One branch for the whole session.** Require a clean working tree — if dirty, stop and ask; never brew over uncommitted work. Create and switch to `feature/brew-<YYYY-MM-DD>` (reuse it if you're already on it). Every feature lands here as its own commit. Never push, never set an upstream.
+3. **Pre-flight — the repo must already be green.** Create `.ristretto.json` if missing (detect the stack, adopt the repo's existing format/lint/typecheck/test tooling, add `.ristretto/` to `.gitignore`), then **run its gates once yourself, before arming anything.** If lint, typecheck, or test is red on an untouched tree, stop immediately:
+
+   ```
+   ⛔ ristretto: repo is not green — nothing brewed.
+      <gate>: <the failure, one line>
+      fix this first; brew won't build on a red tree.
+   ```
+
+   Do not create the marker, do not create the branch, do not dispatch anything. This check costs one test run and is the cheapest failure in the whole command — without it the first *planner* subagent trips the SubagentStop hook, gets retried three times, and surfaces a confusing block for a failure it did not cause and could not fix, having written no source at all.
+
+4. **Arm the gates**, exactly as in `pull`: create the marker `.ristretto/pulling`, and `.ristretto/build/` if it doesn't exist. The marker stays armed for the whole loop — the plugin's Stop **and SubagentStop** hooks run lint + typecheck + test while it exists, so every per-feature subagent is gated individually; a subagent cannot return "done" with red gates. (The gate runner fingerprints a green tree and skips re-running on an unchanged one, so read-only subagents — reviewers, closers — don't pay a full test run at every stop.)
+
+5. **One branch for the whole session.** Require a clean working tree — if dirty, stop and ask; never brew over uncommitted work. Create and switch to `feature/brew-<YYYY-MM-DD>` (reuse it if you're already on it). Every feature lands here as its own commit. Never push, never set an upstream.
 
 ## The loop
 
@@ -37,12 +48,12 @@ A feature is **eligible** when its status is `planned`, all its `Depends:` are `
    > 1. Read `docs/ristretto/plans/<FEATURE-ID>.md`. `## Contract` is binding; `## Approach` is guidance that may be stale.
    > 2. For every ID in `Depends:`, read that feature's archived plan and take its `Provides:` as fact — those signatures exist, use them verbatim.
    > 3. Read the current code in the touchpoint areas. Find the existing utilities, patterns, and test conventions this repo already uses. What you find beats what the Approach says.
-   > 4. Write `.ristretto/build/<FEATURE-ID>.md`: for each seam in `Contract.Seams` (or the whole feature if `Seams` is `—`) — exact file paths to create or modify, the real function/type names and signatures each seam produces and consumes, and the test cases that prove each acceptance criterion, as actual test code in this repo's test style.
-   > 5. **No placeholders.** No "TBD", no "add error handling", no "similar to the above", no reference to a type or function no seam defines. Any of these means the plan is not finished.
+   > 4. Write `.ristretto/build/<FEATURE-ID>.md`: for each unit in `Contract.Units` (or the whole feature if `Units` is `—`) — exact file paths to create or modify, the real function/type names and signatures each unit produces and consumes, and the test cases that prove each acceptance criterion, as actual test code in this repo's test style.
+   > 5. **No placeholders.** No "TBD", no "add error handling", no "similar to the above", no reference to a type or function no unit defines. Any of these means the plan is not finished.
    > 6. If the Contract cannot be satisfied against the current code — a criterion contradicts what's there, a `Consumes:` signature doesn't exist, a decision was never made — do **not** guess. Write nothing and return `blocked`.
    >
    > Final message, exactly one of:
-   > `planned: <FEATURE-ID> — <n> seams, <n> tests`
+   > `planned: <FEATURE-ID> — <n> units, <n> tests`
    > `blocked: <FEATURE-ID> — <the spec gap, phrased as what the plan failed to decide>`
    > Nothing else.
 
