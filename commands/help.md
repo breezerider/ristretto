@@ -24,17 +24,24 @@ THE WORKFLOW
                                     each a fresh subagent — the main context
                                     stays lean, batches scale.
                                     ambiguity → status "blocked", never a guess.
+                                    scoped tests during the loop, full suite once
+                                    at the end.
      …or /ristretto:pull <ID|next>  pull exactly one feature, human between shots.
+     …or /ristretto:pull <ID> raw   ungated spike: no gates, no red-first, no
+                                    review. labelled "raw" on the record forever.
   4. /ristretto:status blocked      your refinement queue after a brew —
                                     each row names its spec gap. refine via
                                     prep (flips it back to planned), re-brew.
+     /ristretto:status ops          your do-it-yourself queue — the SQL, migrations
+                                    and secrets ristretto can't run. tick the box
+                                    in docs/ristretto/manual-ops.md, re-brew.
 
 THE REST OF THE MENU
   /ristretto:shot <feature>         prep + pull one trivial feature in one pass.
                                     same spec standard — no checkable criteria
                                     or no Provides: on the spot → routes to prep.
   /ristretto:status [filter]        roadmap view: gauge + rows.
-                                    filters: open | done | blocked | ID | flight
+                                    filters: open | done | blocked | ops | ID | flight
   /ristretto:tamp [target] [fix]    lean-code review of a diff/file: waste,
                                     duplication, over-build. "fix" applies.
   /ristretto:help                   this menu.
@@ -49,6 +56,15 @@ HOUSE RULES
   • deterministic gates — while implementing, a Stop hook runs your repo's
     lint + typecheck + test (.ristretto.json) and blocks until green.
     enforced, not self-reported. evidence is recorded, not claimed.
+    every gate runs under a timeout: a hung suite is surfaced, never retried.
+  • fast loop, honest end — the loop tests only what the feature touched
+    (gates.testChanged); the full suite runs once at the end and its verdict
+    goes in the report. red there is loud, never quiet.
+  • blocked ≠ needs-ops — a missing DECISION blocks (go refine it). something a
+    human must RUN — SQL, a migration, a secret — becomes a line in
+    docs/ristretto/manual-ops.md and a "needs-ops" close: the code is still
+    built and committed, and dependent features still brew. nothing stalls
+    a flight behind one alter table.
   • independent review — before any commit, a fresh subagent that never saw
     the implementation judges the diff (bugs first, then lean). bugs must be
     fixed; 2 rounds (brew gets a 3rd on a stronger model), then it surfaces

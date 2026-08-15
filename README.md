@@ -6,8 +6,8 @@ A small set of commands following the lifecycle **review → plan → build**, p
 
 - **`/ristretto:grind <feature>`** — honest refinement review: plain-language summary, story-point estimate, the problems it actually has, and a Ready / Not-Ready verdict. Read-only.
 - **`/ristretto:prep <features | ideas> [deep]`** — turns features *or* raw ideas into plans and adds them to the project roadmap. Each plan carries a deep, durable **`## Contract`** (checkable acceptance criteria, `Provides:` / `Consumes:` at type level, resolved decisions, the units of work) and a one-screen **`## Approach`**. Splits an input into sub-features only when there's a real seam (independent deliverables, separate "done", or too big for one sprint) — otherwise keeps it whole. Features that belong together get a shared `Flight` slug, and a real prerequisite is recorded as `Depends:` so ordering is explicit. Fast by default; **escalates into grill mode** — one question at a time, each with a recommended answer, checkpointed to the plan file after every answer — the moment a criterion can't be made checkable or `Provides:` can't be filled. `deep` forces it. Planning only, no code.
-- **`/ristretto:pull <feature | next>`** — implements one feature against the *current* code, in auto mode, then closes it by archiving the plan and updating the roadmap. A **planner** subagent first expands the Contract into a throwaway build plan against HEAD — real paths, real signatures, real test code — so the implementer transcribes rather than re-plans. Tests come first (the build plan's cases become failing tests, then code to green), and before any commit the diff passes an **independent review** by a fresh subagent — bugs must be fixed, two rounds max.
-- **`/ristretto:brew`** — brew the whole pot: autonomously pulls every eligible planned feature in sequence — same gates, evidence, review, and close as `pull`, one commit per feature on a single `feature/brew-<date>` session branch. **Each feature runs through fresh subagents** — planner, implementer, independent reviewer, closer: the main conversation stays a small orchestrator no matter how big the batch, every implementation sees exactly one spec, and nothing is committed unreviewed. A planner that can't satisfy the Contract blocks the feature before an implementer ever runs. Anything needing a decision gets status `blocked` with a one-line reason instead of a guess; you walk through `status blocked` afterward, refine, and re-brew. For when you've prepped a batch and don't want to babysit the roadmap.
+- **`/ristretto:pull <feature | next>`** — implements one feature against the *current* code, in auto mode, then closes it by archiving the plan and updating the roadmap. A **planner** subagent first expands the Contract into a throwaway build plan against HEAD — real paths, real signatures, real test code — so the implementer transcribes rather than re-plans. Tests come first (the build plan's cases become failing tests, then code to green), and before any commit the diff passes an **independent review** by a fresh subagent — bugs must be fixed, two rounds max. Pass `raw` for an ungated spike (see below).
+- **`/ristretto:brew`** — brew the whole pot: autonomously pulls every eligible planned feature in sequence — same gates, evidence, review, and close as `pull`, one commit per feature on a single `feature/brew-<date>` session branch. **Each feature runs through fresh subagents** — planner, implementer, independent reviewer, closer: the main conversation stays a small orchestrator no matter how big the batch, every implementation sees exactly one spec, and nothing is committed unreviewed. A planner that can't satisfy the Contract blocks the feature before an implementer ever runs. Anything needing a **decision** gets status `blocked` with a one-line reason instead of a guess; anything needing a **human to run something** gets `needs-ops`, a line in `manual-ops.md`, and still gets built — it never stalls the features behind it. You walk through `status blocked` and `status ops` afterward, refine or run, and re-brew. Tests are scoped to each feature during the loop and the full suite is proven once at the end, so a slow suite doesn't make a batch impossible. For when you've prepped a batch and don't want to babysit the roadmap.
 - **`/ristretto:status [filter]`** — read-only view of the roadmap: what's planned, in progress, and done. Changes nothing.
 - **`/ristretto:help`** — the menu: every command, the workflow, and the house rules as a CLI-style card. Read-only, instant.
 - **`/ristretto:tamp [path | feature | nothing]`** — honest lean-code review: finds runtime waste, duplication, dead/over-built code, and readability drag in a diff or file, ranked and capped at the few that matter. Read-only; pass `fix` to apply the top findings. The code-analogue of `grind`.
@@ -35,7 +35,7 @@ State lives in files, not the conversation — clearing the chat never loses it.
 
 - `roadmap.md` is the fast-read index; `pull` boots from it instead of re-scanning the repo.
 - **`Provides:` / `Consumes:` close type drift across a Flight** — when B depends on A, B's `Consumes:` must be a subset of A's `Provides:`; `prep` checks it, and at close `pull` corrects `Provides:` in the archived plan to whatever was actually built, because that's what the next feature's planner reads as fact.
-- **Flight grouping + `Depends:` give honest ordering without a scheduler** — `/ristretto:pull next` skips any feature still waiting on an unfinished prerequisite, so you can't pull work whose foundation isn't built yet. ristretto stays one-feature-at-a-time; the graph is recorded, not run as parallel waves.
+- **Flight grouping + `Depends:` give honest ordering without a scheduler** — `/ristretto:pull next` skips any feature still waiting on an unfinished prerequisite, so you can't pull work whose foundation isn't built yet. A prerequisite counts as finished when it's `done` **or** `needs-ops`; only `blocked` holds dependents back. ristretto stays one-feature-at-a-time; the graph is recorded, not run as parallel waves.
 - **Closing is `pull`'s job, every time** — it archives the plan and flips the roadmap row automatically. You never close by hand, so "forgot to close" can't happen.
 - The roadmap is trusted as written. Keeping it honest is yours — but since closing is automatic, it stays honest with almost no effort, and it doubles as a plain-language view of what's done and what's next.
 
@@ -43,8 +43,9 @@ State lives in files, not the conversation — clearing the chat never loses it.
 
 `pull` and `shot` don't self-report "tests pass" — the plugin ships hooks that enforce it:
 
-- On the first pull in a repo, a `.ristretto.json` is created at the root with the repo's own `format` / `lint` / `typecheck` / `test` commands (stack auto-detected; existing tooling adopted, never replaced). Commit it.
+- On the first pull in a repo, a `.ristretto.json` is created at the root with the repo's own `format` / `lint` / `typecheck` / `test` / `testChanged` commands and per-gate `timeouts` (stack auto-detected; existing tooling adopted, never replaced). Commit it.
 - While a pull is active (marker file `.ristretto/pulling`), a **Stop hook** (and a **SubagentStop hook**, so each of brew's per-feature subagents is gated individually) runs lint + typecheck + test and blocks the agent (exit 2) until they're green. Red gate = not done — the agent can't rationalize past it, and it's instructed never to weaken or delete gates or tests to get there. After 3 forced retries it surfaces the failure to you instead of looping.
+- **Every gate runs under a timeout, and a hang is not a red gate.** A suite that never returns used to take the whole session with it — the hook was killed with nothing to report, and the next stop hit the same wall. Now the gate is killed at its budget, the run is reported as *unverified* (not failed, not green), and it is **surfaced immediately rather than retried** — retrying a hang only hangs three more times. The message names the gate and points at the two real fixes: scope the tests, or raise the budget.
 - A **PostToolUse hook** formats each touched file as the agent writes — a convenience that never blocks.
 - Outside a pull, the hooks exit immediately: no nagging in casual sessions, and repos without a `.ristretto.json` are never touched.
 - **Tests come first, red first**: acceptance criteria are transcribed into tests *before* implementation, and the failing run is the proof the tests test something. A test that passes before any code is written proves nothing.
@@ -52,6 +53,47 @@ State lives in files, not the conversation — clearing the chat never loses it.
 - Closing a feature also records **Evidence** in the archived plan: how each acceptance criterion was proven — red→green test names, output, measurements — plus the gate summary and the review verdict. "Implemented successfully" is not evidence.
 
 The gate runner is plain Node (`scripts/gate.js`) — no bash, no jq — so it works the same on Windows, macOS, and Linux. It fingerprints a green working tree and skips re-running gates while the tree is unchanged, so review/close subagents don't pay a full test run at every stop. Check it with `node scripts/gate.test.js`.
+
+## Fast loop, honest end
+
+On a repo whose suite takes ten minutes, gating every subagent stop on the full suite doesn't make a batch slow — it makes it impossible. So the test gate has two speeds:
+
+- **During the loop: `gates.testChanged`** — only the tests affected by what this feature touched. Use the runner's own change detection (`vitest run --changed HEAD`, `jest -o`) or `{files}`, which is substituted with the touched paths (`jest --findRelatedTests {files}`, `pytest {files}`). Lint and typecheck stay repo-wide; they're cheap next to a suite, and a scoped typecheck is a contradiction in terms.
+- **Once at the end: `node scripts/gate.js verify`** — lint + typecheck + the *whole* suite, ignoring both the scoped shortcut and the green-tree cache. `brew` runs it twice: as pre-flight (a red tree is the cheapest possible failure, and it's caught before a single subagent is dispatched) and after the last feature closes.
+
+That trade is explicit: scoped runs can't see cross-feature breakage, so the end-of-batch run is where it shows up. When it goes red, `brew` reports it loudly and first — and does **not** amend or revert the commits. Nothing was pushed, the branch is yours to review, and a fast batch with one honest red beats a batch too slow to finish. What isn't acceptable is a quiet one.
+
+If `testChanged` is empty, the loop just runs the full suite as before — nothing changes for repos where that's already fast.
+
+## Manual ops: things a coding agent can't do
+
+Some steps aren't code. Running SQL against a live database, applying a migration, setting a secret, enabling an API in someone's console — an agent cannot do any of it, and a plan that needs one used to collapse into `blocked`, which is the wrong word. `blocked` means *the spec is broken, go refine it*. "Run this migration" is not a spec gap; the spec is fine and a human just has to turn a key. Same status, opposite remedy — so they're now two statuses:
+
+- **`blocked`** — a missing decision. `/ristretto:status blocked` is the refinement queue; fix it with `prep`.
+- **`needs-ops`** — a missing keystroke. `/ristretto:status ops` is the do-it-yourself queue; fix it with your hands.
+
+`prep` declares known ops in the Contract's `Manual-Ops:`, and the **planner discovers the rest against HEAD** — it reads the code and sees that the column the Contract needs isn't in the schema. Either way the op lands in `docs/ristretto/manual-ops.md` as a ticked-by-you checklist item with the exact command:
+
+```markdown
+## BREW-224 — user tiers
+- [ ] **before** · Supabase SQL editor (dev) · add the column the code reads
+      ```sql
+      alter table profiles add column tier text not null default 'free';
+      ```
+      _blocks:_ criterion 2 ("a free user sees the upgrade banner") · _test:_ `tier banner renders`
+```
+
+**The feature still gets built.** The code is written, gated, reviewed, and committed exactly as always; only the tests that need the live environment are written *skipped*, each naming the op that unblocks it. `needs-ops` is a **closing** status, not a blocking one — the plan is archived, the commit is made, and the row records which criteria are `pending ops` instead of proven.
+
+The part that matters for an unattended `brew`: **`needs-ops` never holds up another feature.** A `Depends:` is satisfied by `done` *or* `needs-ops`, because the prerequisite's `Provides:` exist in the code either way — what's outstanding is in a database console, not in the repo. Only `blocked` stops dependents. One pending `alter table` can't stall a whole flight.
+
+Run the op, tick the box, and `/ristretto:pull <ID>` (or the next `brew`) un-skips those tests, proves the pending criteria, and flips the row to `done`. Ops marked `after` — backfills, prod flags, key rotations — don't hold anything up at all: the feature closes `done` and the op stays on the list as a deploy step. ristretto never ticks a box itself; that check is your signature that it really happened.
+
+## `raw`: the ungated lane
+
+The gates are why the output compiles, so they aren't optional on real work. But spikes exist. `/ristretto:pull <ID> raw` executes the plan and nothing else — no gates armed, no planner subagent, no red-first, no review — for prototypes and throwaway branches where the ceremony costs more than it returns.
+
+The one rule is honesty: raw work is **labelled raw, permanently**. The Evidence records `gates: skipped (raw)` and `review: skipped (raw)`, and the roadmap row is tagged `raw`. Months later you can still tell which commits nothing ever checked — an ungated lane that looks gated on the roadmap would be worse than having no fast lane at all.
 
 ## Git: branch & commit, never push
 
@@ -75,12 +117,13 @@ The coffee metaphor carries real signal, not just decoration — and nothing ani
 ## Layout it generates (per project)
 
 ```
-.ristretto.json         # gate commands for this repo (committed)
-.ristretto/             # transient pull state — marker & retry counter (gitignored)
+.ristretto.json         # gate commands + timeouts for this repo (committed)
+.ristretto/             # transient pull state — marker, retry counter, green cache (gitignored)
   build/
     BREW-224.md         # throwaway build plan, written at pull time, deleted at close
 docs/ristretto/
   roadmap.md            # always-current index of every feature
+  manual-ops.md         # the SQL, migrations & secrets only you can run — tick a box when done
   plans/
     BREW-224.md         # active plans — durable ## Contract + one-screen ## Approach
     archived/
@@ -105,11 +148,13 @@ To share with the team, push this folder to a Git repo and `/plugin marketplace 
 /ristretto:prep BREW-224 deep                 # force grill mode — one question at a time
 /ristretto:pull BREW-224                      # implement one (branch + commit)
 /ristretto:pull BREW-224 nocommit             # implement, but leave the commit to you
+/ristretto:pull BREW-224 raw                  # ungated spike — no gates, no review
 /ristretto:pull next                          # implement the top planned feature
 /ristretto:brew                              # brew every eligible feature, unattended
 /ristretto:status                             # see the whole roadmap
 /ristretto:status open                        # only what's not done yet
 /ristretto:status blocked                     # the refinement queue after a brew
+/ristretto:status ops                         # the do-it-yourself queue: SQL, migrations
 /ristretto:shot ROAST-150 rename the menu item # plan + do a trivial one in one pass
 /ristretto:tamp                               # review the changes I just made
 /ristretto:tamp src/auth                      # green-up pass on existing code

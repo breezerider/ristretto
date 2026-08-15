@@ -26,8 +26,9 @@ If `roadmap.md` is new, start it with this table:
 |--------|---------|-------|--------|------|---------|
 ```
 
-Status values: `planned` · `in-progress` · `blocked` · `done`.
-`blocked` is set by `pull`/`brew` when a feature can't proceed without a decision — the row carries a one-line reason. Re-prepping a `blocked` feature (refining its plan to resolve the reason) flips it back to `planned`.
+Status values: `planned` · `in-progress` · `blocked` · `needs-ops` · `done`.
+`blocked` is set by `pull`/`brew` when a feature can't proceed without a **decision** — the row carries a one-line reason. Re-prepping a `blocked` feature (refining its plan to resolve the reason) flips it back to `planned`.
+`needs-ops` means the opposite kind of stuck: the spec is fine and the code is built, but a **human has to run something** ristretto can't (see *Manual ops* below). It is a closing status, not a blocking one.
 Flight: a short kebab slug grouping related features, or `—` for a standalone feature.
 
 ## Decompose only when there's a real seam
@@ -54,6 +55,8 @@ When unsure, keep it whole. Before writing any plans, **print the proposed split
 When inputs belong together — a split of one feature, or several features that form one deliverable — give them a shared **Flight** slug (kebab, e.g. `dpk-detail`). A lone feature with no siblings gets `—`. This is just a grouping label; it changes nothing about how a feature is planned or pulled.
 
 When one resulting feature can't start until another lands, record it with **`Depends:`** (the prerequisite feature IDs) on the dependent plan. When two are independent and could be worked side by side, note it with **`Parallel-with:`**. Both default to `—` (no constraint). These are honest notes about the graph — `pull next` reads `Depends:` to avoid pulling a feature whose foundation isn't built yet; `Parallel-with:` is informational. ristretto stays one-feature-at-a-time; you're recording order, not running waves.
+
+A `Depends:` is satisfied by a prerequisite that is `done` **or** `needs-ops` — a pending manual op means an environment step is outstanding, not that the code and its `Provides:` are missing. Only `blocked` holds dependents back.
 
 Keep it light: only add `Depends:` where a real prerequisite exists. Most features depend on nothing.
 
@@ -98,6 +101,7 @@ Keep it light: only add `Depends:` where a real prerequisite exists. Most featur
    - Consumes: <surface from Depends: features this one calls, same form, or — >
    - Decisions: <resolved question -> the ruling, one line each>
    - Units: <the 2-6 units of work inside this feature, one line each, or — >
+   - Manual-Ops: <before|after · where · what a human must run, one line each, or — >
    - Blockers: <what could not be made checkable -> who/what can answer, or — >
 
    ## Approach
@@ -113,9 +117,20 @@ Keep it light: only add `Depends:` where a real prerequisite exists. Most featur
 
    **This is the opposite default from "Decompose only when there's a real seam" above, and the two must not be confused.** Splitting one input into several *roadmap features* is discouraged — it multiplies git-tracking IDs. Naming the *units of work inside one feature* is encouraged and costs nothing: same ID, same plan, same branch, same commit. `Units:` is what `pull`'s planner expands into per-unit file paths, signatures, and tests; a feature that arrives with `Units: —` when it plainly has several is the single most common cause of a thin build plan and inaccurate code.
 
-5. **Check `Consumes:` against `Provides:`.** When feature B lists A in `Depends:`, B's `Consumes:` must be a subset of A's `Provides:`. Check this at prep time and say so if it isn't — a mismatch here is the cheapest bug you will ever fix. Read A's plan wherever it lives, `plans/` or `plans/archived/`.
+5. **Fill `Manual-Ops:` for anything a coding agent cannot do itself.** Running SQL against a live database, applying a migration to an environment, setting a secret or env var, enabling an API or flipping a switch in a third-party console, DNS, app-store steps, anything needing credentials the agent doesn't have. Each op is one line:
 
-6. **Add or update one row** in `roadmap.md` for the feature — fill the `Flight` cell with its slug (or `—`).
+   `<before|after> · <where a human does it> · <what to do>`
+
+   - **`before`** — the app can't run correctly against the environment until it's done (the column the code reads doesn't exist yet, the API key is unset). The code is still written and committed; the criteria that need the live environment simply can't be proven yet.
+   - **`after`** — a deploy or rollout step (backfill prod, rotate a key, enable the flag for real users). Nothing about the build waits on it.
+
+   Ask about this in grill mode whenever a feature touches a schema, an external service, or configuration — it is the single most common thing a plan forgets, and the one that stops an unattended `brew` in its tracks. Don't put the SQL or the command here; `Manual-Ops:` names the step. The exact thing to run is written by `pull`/`brew` into `docs/ristretto/manual-ops.md`, against the code as it actually ends up.
+
+   `pull`/`brew` may also discover ops that prep didn't foresee — the planner reads HEAD and sees the column that isn't there. That's expected, not a prep failure.
+
+6. **Check `Consumes:` against `Provides:`.** When feature B lists A in `Depends:`, B's `Consumes:` must be a subset of A's `Provides:`. Check this at prep time and say so if it isn't — a mismatch here is the cheapest bug you will ever fix. Read A's plan wherever it lives, `plans/` or `plans/archived/`.
+
+7. **Add or update one row** in `roadmap.md` for the feature — fill the `Flight` cell with its slug (or `—`).
 
 ## Hard rules
 
