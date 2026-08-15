@@ -56,7 +56,8 @@ HOUSE RULES
   • deterministic gates — while implementing, a Stop hook runs your repo's
     lint + typecheck + test (.ristretto.json) and blocks until green.
     enforced, not self-reported. evidence is recorded, not claimed.
-    every gate runs under a timeout: a hung suite is surfaced, never retried.
+    a gate that stops PRINTING is hung and gets killed; a slow one that keeps
+    printing is left to finish. hangs are surfaced, never retried.
   • fast loop, honest end — the loop tests only what the feature touched
     (gates.testChanged); the full suite runs once at the end and its verdict
     goes in the report. red there is loud, never quiet.

@@ -1,5 +1,5 @@
 {
-  "description": "ristretto deterministic gates: per-file format after Write/Edit (never blocks), full lint+typecheck+test gate on Stop and SubagentStop while a pull is active (blocks with exit 2). SubagentStop gates brew's per-feature subagents individually. Each gate runs under its own timeout from .ristretto.json; the hook timeout below is the outer backstop and must stay above the sum of them, or a slow suite is killed before it can report.",
+  "description": "ristretto deterministic gates: per-file format after Write/Edit (never blocks), full lint+typecheck+test gate on Stop and SubagentStop while a pull is active (blocks with exit 2). SubagentStop gates brew's per-feature subagents individually. Hangs are detected by output silence (per-gate budgets in .ristretto.json), not by total runtime, so a slow-but-working suite is never killed. The hook timeouts below are only an outer backstop for the pathological case; they must stay well above any real gate run, or a working suite is killed before it can report.",
   "hooks": {
     "PostToolUse": [
       {
@@ -20,7 +20,7 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/gate.js\" full",
-            "timeout": 1800,
+            "timeout": 3600,
             "statusMessage": "ristretto: running gates (lint, typecheck, test)..."
           }
         ]
@@ -32,7 +32,7 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/gate.js\" full",
-            "timeout": 1800,
+            "timeout": 3600,
             "statusMessage": "ristretto: running gates on subagent result..."
           }
         ]

@@ -43,9 +43,11 @@ State lives in files, not the conversation — clearing the chat never loses it.
 
 `pull` and `shot` don't self-report "tests pass" — the plugin ships hooks that enforce it:
 
-- On the first pull in a repo, a `.ristretto.json` is created at the root with the repo's own `format` / `lint` / `typecheck` / `test` / `testChanged` commands and per-gate `timeouts` (stack auto-detected; existing tooling adopted, never replaced). Commit it.
+- On the first pull in a repo, a `.ristretto.json` is created at the root with the repo's own `format` / `lint` / `typecheck` / `test` / `testChanged` commands (stack auto-detected; existing tooling adopted, never replaced). Commit it.
 - While a pull is active (marker file `.ristretto/pulling`), a **Stop hook** (and a **SubagentStop hook**, so each of brew's per-feature subagents is gated individually) runs lint + typecheck + test and blocks the agent (exit 2) until they're green. Red gate = not done — the agent can't rationalize past it, and it's instructed never to weaken or delete gates or tests to get there. After 3 forced retries it surfaces the failure to you instead of looping.
-- **Every gate runs under a timeout, and a hang is not a red gate.** A suite that never returns used to take the whole session with it — the hook was killed with nothing to report, and the next stop hit the same wall. Now the gate is killed at its budget, the run is reported as *unverified* (not failed, not green), and it is **surfaced immediately rather than retried** — retrying a hang only hangs three more times. The message names the gate and points at the two real fixes: scope the tests, or raise the budget.
+- **A hang is caught by silence, not by a stopwatch — and a hang is not a red gate.** A suite that never returns used to take the whole session with it: `execSync` had no timeout at all, so the hook was eventually killed with nothing to report, and the next stop hit the same wall. The obvious fix — cap total runtime — is the wrong one, because it can't tell a wedged suite from a slow one and murders the slow one at an arbitrary number. So the gate watches the *output stream* instead: a gate that has printed nothing for its `silence` budget is hung and gets killed (along with its whole process group, so forked workers don't survive holding the port that caused it); a gate that keeps printing is working and is left alone however long it takes. A hard duration cap still exists as `timeouts`, but it's **off by default**. A hang is reported as *unverified* — neither failed nor green — and **surfaced immediately rather than retried**, since retrying a hang only hangs again.
+
+  Defaults are per gate, in seconds: `lint` and `typecheck` get 600 because tools like `eslint .` and `tsc --noEmit` legitimately print nothing until they finish, so their silence carries no information; test runners stream progress, so 300 of silence from one is a much stronger signal.
 - A **PostToolUse hook** formats each touched file as the agent writes — a convenience that never blocks.
 - Outside a pull, the hooks exit immediately: no nagging in casual sessions, and repos without a `.ristretto.json` are never touched.
 - **Tests come first, red first**: acceptance criteria are transcribed into tests *before* implementation, and the failing run is the proof the tests test something. A test that passes before any code is written proves nothing.
@@ -58,12 +60,12 @@ The gate runner is plain Node (`scripts/gate.js`) — no bash, no jq — so it w
 
 On a repo whose suite takes ten minutes, gating every subagent stop on the full suite doesn't make a batch slow — it makes it impossible. So the test gate has two speeds:
 
-- **During the loop: `gates.testChanged`** — only the tests affected by what this feature touched. Use the runner's own change detection (`vitest run --changed HEAD`, `jest -o`) or `{files}`, which is substituted with the touched paths (`jest --findRelatedTests {files}`, `pytest {files}`). Lint and typecheck stay repo-wide; they're cheap next to a suite, and a scoped typecheck is a contradiction in terms.
+- **During the loop: `gates.testChanged`** — only the tests affected by what this feature touched. `{files}` is substituted with every modified *and untracked* path: `vitest related --run {files}`, `jest --findRelatedTests {files}`, `pytest {files}`. Prefer that over a runner's own change detection (`vitest --changed`, `jest -o`) — those read git's diff, which excludes untracked files, and a brand-new test file is exactly what red-first produces. Lint and typecheck stay repo-wide; they're cheap next to a suite, and a scoped typecheck is a contradiction in terms.
 - **Once at the end: `node scripts/gate.js verify`** — lint + typecheck + the *whole* suite, ignoring both the scoped shortcut and the green-tree cache. `brew` runs it twice: as pre-flight (a red tree is the cheapest possible failure, and it's caught before a single subagent is dispatched) and after the last feature closes.
 
 That trade is explicit: scoped runs can't see cross-feature breakage, so the end-of-batch run is where it shows up. When it goes red, `brew` reports it loudly and first — and does **not** amend or revert the commits. Nothing was pushed, the branch is yours to review, and a fast batch with one honest red beats a batch too slow to finish. What isn't acceptable is a quiet one.
 
-If `testChanged` is empty, the loop just runs the full suite as before — nothing changes for repos where that's already fast.
+If `testChanged` is empty, the loop just runs the full suite as before — nothing changes for repos where that's already fast, and that's the right setting until a suite is slow enough to hurt.
 
 ## Manual ops: things a coding agent can't do
 
@@ -117,7 +119,7 @@ The coffee metaphor carries real signal, not just decoration — and nothing ani
 ## Layout it generates (per project)
 
 ```
-.ristretto.json         # gate commands + timeouts for this repo (committed)
+.ristretto.json         # gate commands + hang budgets for this repo (committed)
 .ristretto/             # transient pull state — marker, retry counter, green cache (gitignored)
   build/
     BREW-224.md         # throwaway build plan, written at pull time, deleted at close

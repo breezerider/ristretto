@@ -46,25 +46,30 @@ The plugin ships deterministic gate hooks: while a pull is active, a Stop hook r
        "lint": "npx eslint .",
        "typecheck": "npx tsc --noEmit",
        "test": "npx vitest run",
-       "testChanged": "npx vitest run --changed HEAD"
-     },
-     "timeouts": { "lint": 180, "typecheck": 300, "test": 900, "testChanged": 300 }
+       "testChanged": "npx vitest related --run {files}"
+     }
    }
    ```
 
    `{file}` is replaced with the touched file (format only). `.ristretto.json` belongs in git; also add `.ristretto/` (transient state) to `.gitignore` if it isn't there.
 
-   **Always set `testChanged` — it is what keeps the loop fast on a real repo.** It runs only the tests affected by what this feature touched; the full suite is proven once at the end, by `verify`. Use the runner's own change detection where it has one, or `{files}` to receive the touched paths:
+   **Set `testChanged` when the full suite takes more than a minute** — it is what keeps the loop fast on a real repo. It runs only the tests affected by what this feature touched; the full suite is proven once at the end, by `verify`. `{files}` is replaced with every modified *and untracked* path:
 
    | runner | `testChanged` |
    |---|---|
-   | vitest | `npx vitest run --changed HEAD` |
+   | vitest | `npx vitest related --run {files}` |
    | jest | `npx jest --findRelatedTests {files} --passWithNoTests` |
    | pytest | `python -m pytest {files}` |
-   | go | `go test ./...` *(already fast — reuse `test`)* |
    | flutter | `flutter test {files}` |
+   | go | *(usually fast enough — leave empty and let `test` run)* |
 
-   Leave `testChanged` as `""` only when the suite is genuinely quick (under a minute) or the runner can't scope. `timeouts` are seconds and optional — the defaults above apply. A gate that blows its timeout is killed and **surfaced immediately, never retried**: a hung suite is what wedges a session, and retrying a hang just hangs three more times.
+   **Prefer the `{files}` forms over a runner's own change detection.** `vitest --changed`, `jest -o` and friends read git's diff, which does not include untracked files — and a brand-new test file is exactly what red-first produces, so the tests that prove this feature would be the ones skipped. Leave `testChanged` as `""` when the suite is already quick; the loop then runs the full gate as it always did.
+
+   Two optional keys tune how a gate is judged hung, both in seconds:
+   - **`silence`** — how long a gate may print *nothing* before it's killed as hung. Defaults: `lint` 600, `typecheck` 600, `test`/`testChanged` 300. Raise it for a tool that's quiet by nature.
+   - **`timeouts`** — a hard cap on total runtime. **Off by default, and usually should stay off**: a slow gate is not a broken gate, and a cap kills a working suite at an arbitrary number.
+
+   A gate judged hung is **surfaced immediately, never retried** — retrying a hang just hangs again — and the work is reported *unverified*, which is neither green nor red.
 
 2. **Create the marker file `.ristretto/pulling`** (empty), and `.ristretto/build/` if it doesn't exist. The marker arms the Stop gate for the duration of the pull. The gates are infrastructure, not suggestions: never weaken, skip, or delete gates or tests to get green — a red gate means the work is not done.
 
@@ -163,7 +168,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.js" verify
 
 `verify` runs lint + typecheck + the *whole* test gate, ignoring both the scoped-test shortcut the loop uses and the green-tree cache. This is the run that proves nothing elsewhere in the repo broke; the scoped runs during implementation only ever proved the feature's own files. Fix until it's green — it exits 0 green, 1 red, and prints a `gates: lint ✓ typecheck ✓ test ✓` summary you'll reuse in the Evidence. Under `raw`, skip this and say so.
 
-If a gate **timed out** rather than failed, the work is unverified, not proven broken: don't commit on the strength of a hang. Fix the hang or set `testChanged` / raise the timeout, then verify again.
+If a gate was killed as **hung** (it stopped printing) rather than failing, the work is unverified, not proven broken: don't commit on the strength of a hang. Find what it's waiting on — an open handle, a port, watch mode, a prompt — or raise that gate's `silence` budget if the tool is simply quiet for long stretches. Then verify again.
 
 Then write down the **Evidence**: for each criterion, *how* it was proven — test names, command output, measurements — including **red→green**: which tests failed before implementation and pass now. "Implemented successfully" is not evidence. A criterion waiting on a `before` manual op is recorded as `pending ops: <the op>` with its skipped test named — never as proven.
 

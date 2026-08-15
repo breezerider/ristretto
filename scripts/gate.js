@@ -12,29 +12,40 @@
 //           test gate, ignoring both the marker and the green-tree cache. Prints a one-line
 //           summary. Exits 0 green, 1 red. This is brew's pre-flight and its end-of-run proof.
 //
-// Every gate runs under a timeout (.ristretto.json "timeouts", seconds). A gate that hangs is
-// reported and surfaced immediately — never retried, because retrying a hang just hangs longer.
+// Hang detection is by SILENCE, not duration. A slow suite is still working and prints as it
+// goes; a hung one goes quiet. Killing on total runtime would murder a legitimately slow suite
+// and call it broken, so there is no duration cap by default — set `timeouts` to opt into one.
+// A stalled gate is reported and surfaced immediately, never retried: retrying a hang re-hangs.
 //
 // Reads hook JSON from stdin (Claude Code protocol) in quick/full mode.
 'use strict';
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { execSync } = require('child_process');
+const { spawn, spawnSync, execSync } = require('child_process');
 
 const MODE = process.argv[2] || 'quick';
 const MAX_RETRIES = 3;
 
-// Seconds. The sum of lint + typecheck + test must stay under the hook timeout in hooks.json,
-// or the hook is killed before it can report anything — which is the failure these exist to end.
-const DEFAULT_TIMEOUTS = { format: 30, lint: 180, typecheck: 300, test: 900, testChanged: 300 };
+// Seconds a gate may produce NO output before it's treated as hung.
+// lint and typecheck get a long rope on purpose: tools like `tsc --noEmit` and `eslint .` print
+// nothing at all until they finish, so their silence carries no information. Test runners stream
+// progress, so silence from one is a much stronger signal.
+const DEFAULT_SILENCE = { format: 30, lint: 600, typecheck: 600, test: 300, testChanged: 300 };
+
+// Hard duration caps, seconds. OFF by default — a slow gate is not a broken gate. `format` is the
+// exception: it's a per-keystroke convenience on a single file, and its hook is capped anyway.
+const DEFAULT_HARD_CAP = { format: 30 };
+
+const POLL_MS = 1000;
+const MAX_CAPTURE = 2 * 1024 * 1024; // keep the tail of the output, not all of it
 
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const configPath = path.join(projectDir, '.ristretto.json');
 const markerPath = path.join(projectDir, '.ristretto', 'pulling');
 const retriesPath = path.join(projectDir, '.ristretto', 'gate-retries');
 const greenPath = path.join(projectDir, '.ristretto', 'gate-green');
-const timeoutPath = path.join(projectDir, '.ristretto', 'gate-timeout');
+const stalledPath = path.join(projectDir, '.ristretto', 'gate-stalled');
 
 // No config → ristretto not set up in this repo → never interfere.
 if (!fs.existsSync(configPath)) process.exit(0);
@@ -45,11 +56,13 @@ if (MODE !== 'verify') {
 }
 
 let gates = {};
-let timeouts = DEFAULT_TIMEOUTS;
+let silence = DEFAULT_SILENCE;
+let hardCaps = DEFAULT_HARD_CAP;
 try {
   const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   gates = config.gates || {};
-  timeouts = { ...DEFAULT_TIMEOUTS, ...(config.timeouts || {}) };
+  silence = { ...DEFAULT_SILENCE, ...(config.silence || {}) };
+  hardCaps = { ...DEFAULT_HARD_CAP, ...(config.timeouts || {}) };
 } catch (e) {
   if (MODE === 'verify') {
     console.error(`ristretto: .ristretto.json is unparseable (${e.message}) — fix it, the gate cannot run.`);
@@ -63,24 +76,73 @@ try {
   process.exit(0);
 }
 
-// Returns null on success, or { output, timedOut } on failure.
-function run(cmd, timeoutSec) {
-  try {
-    execSync(cmd, {
-      cwd: projectDir,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      maxBuffer: 10 * 1024 * 1024,
-      timeout: Math.max(1, timeoutSec) * 1000,
-      killSignal: 'SIGKILL',
-    });
-    return null;
-  } catch (e) {
-    const output = ((e.stdout || '') + (e.stderr || '')) || String(e.message);
-    // execSync surfaces a timeout kill as ETIMEDOUT, or as the kill signal itself.
-    const timedOut = e.code === 'ETIMEDOUT' || e.signal === 'SIGKILL' || e.killed === true;
-    return { output, timedOut };
+// Kill the whole process group. A test runner forks workers; killing only the shell leaves them
+// holding the ports and file handles that caused the hang in the first place.
+function killTree(child) {
+  if (process.platform === 'win32') {
+    try { spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }); return; } catch { /* fall through */ }
   }
+  try { process.kill(-child.pid, 'SIGKILL'); } catch {
+    try { child.kill('SIGKILL'); } catch { /* already gone */ }
+  }
+}
+
+// Returns null on success, or { output, stalled, hardCapped, quietFor } on failure.
+// Watches the output stream: a gate that has printed nothing for `silenceSec` is hung, however
+// long it has been running in total. `hardCapSec` (undefined = no cap) is a separate opt-in belt.
+function run(cmd, { silenceSec, hardCapSec }) {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, {
+      cwd: projectDir,
+      shell: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32', // own process group, so killTree can take the workers
+    });
+
+    const chunks = [];
+    let size = 0;
+    let lastOutput = Date.now();
+    const startedAt = lastOutput;
+    let stalled = false;
+    let hardCapped = false;
+
+    const capture = (buf) => {
+      lastOutput = Date.now();
+      chunks.push(buf);
+      size += buf.length;
+      while (size > MAX_CAPTURE && chunks.length > 1) size -= chunks.shift().length;
+    };
+    child.stdout.on('data', capture);
+    child.stderr.on('data', capture);
+
+    const watchdog = setInterval(() => {
+      const now = Date.now();
+      if (silenceSec && now - lastOutput >= silenceSec * 1000) {
+        stalled = true;
+        clearInterval(watchdog);
+        killTree(child);
+      } else if (hardCapSec && now - startedAt >= hardCapSec * 1000) {
+        hardCapped = true;
+        clearInterval(watchdog);
+        killTree(child);
+      }
+    }, POLL_MS);
+
+    const finish = (code) => {
+      clearInterval(watchdog);
+      const output = Buffer.concat(chunks).toString('utf8');
+      if (stalled || hardCapped) {
+        return resolve({ output, stalled, hardCapped, quietFor: Math.round((Date.now() - lastOutput) / 1000) });
+      }
+      resolve(code === 0 ? null : { output: output || `exited with code ${code}`, stalled: false, hardCapped: false });
+    };
+
+    child.on('close', (code) => finish(code));
+    child.on('error', (err) => {
+      clearInterval(watchdog);
+      resolve({ output: String(err.message), stalled: false, hardCapped: false });
+    });
+  });
 }
 
 function git(args) {
@@ -151,105 +213,115 @@ function gateList(scoped) {
   return list;
 }
 
-function timeoutAdvice(gate) {
+const budget = (gate) => ({ silenceSec: silence[gate.key], hardCapSec: hardCaps[gate.key] });
+
+function hangAdvice(gate, result) {
+  const why = result.stalled
+    ? `printed nothing for ${silence[gate.key]}s and was killed — it is hung, not slow`
+    : `exceeded the hard cap of ${hardCaps[gate.key]}s in .ristretto.json and was killed`;
   return [
-    `ristretto: gate '${gate.label}' did not finish within ${timeouts[gate.key]}s and was killed.`,
+    `ristretto: gate '${gate.label}' ${why}.`,
     `  A hung gate is not a red gate — the work is UNVERIFIED, not proven broken.`,
-    `  Fix the hang, or in .ristretto.json: set "gates".."testChanged" to a scoped test command`,
-    `  (e.g. "npx vitest run {files}" / "npx jest --findRelatedTests {files}" / "pytest {files}"),`,
-    `  and/or raise "timeouts"."${gate.key}".`,
+    `  Find what it's waiting on (an open handle, a port, watch mode, a prompt), or:`,
+    `  · scope the run — set "gates"."testChanged" (e.g. "npx jest --findRelatedTests {files}")`,
+    `  · if the tool is simply quiet for long stretches, raise "silence"."${gate.key}" (now ${silence[gate.key]}s)`,
   ].join('\n');
 }
 
-if (MODE === 'quick') {
-  const file = hook.tool_input && hook.tool_input.file_path;
-  if (gates.format && file && fs.existsSync(file)) {
-    run(gates.format.replace('{file}', `"${file}"`), timeouts.format); // convenience only — never block, stay quiet
-  }
-  process.exit(0);
-}
-
-if (MODE === 'verify') {
-  // Full scope, no cache, no marker required. Green here is the real proof.
-  const results = [];
-  let failures = '';
-  let timedOut = false;
-  for (const gate of gateList(false)) {
-    const result = run(gate.cmd, timeouts[gate.key]);
-    if (result === null) {
-      results.push(`${gate.label} ✓`);
-      continue;
+async function main() {
+  if (MODE === 'quick') {
+    const file = hook.tool_input && hook.tool_input.file_path;
+    if (gates.format && file && fs.existsSync(file)) {
+      // convenience only — never block, stay quiet
+      await run(gates.format.replace('{file}', `"${file}"`), budget({ key: 'format' }));
     }
-    results.push(`${gate.label} ✗`);
-    if (result.timedOut) {
-      timedOut = true;
-      failures += `\n${timeoutAdvice(gate)}`;
-    } else {
-      failures += `\n--- ristretto gate '${gate.label}' FAILED ---\n${result.output.split('\n').slice(-40).join('\n')}`;
-    }
-  }
-  if (!results.length) {
-    console.log('gates: none configured — nothing to verify');
     process.exit(0);
   }
-  console.log(`gates: ${results.join(' ')}`);
-  if (failures) {
-    console.error(failures);
-    process.exit(1);
-  }
-  // A clean verify is the strongest green there is — seed the cache with it.
-  if (!timedOut) {
-    const green = treeFingerprint();
-    if (green !== null) {
-      try { fs.mkdirSync(path.dirname(greenPath), { recursive: true }); fs.writeFileSync(greenPath, green); } catch { /* best-effort */ }
+
+  if (MODE === 'verify') {
+    // Full scope, no cache, no marker required. Green here is the real proof.
+    const results = [];
+    let failures = '';
+    let hung = false;
+    for (const gate of gateList(false)) {
+      const result = await run(gate.cmd, budget(gate));
+      if (result === null) {
+        results.push(`${gate.label} ✓`);
+        continue;
+      }
+      results.push(`${gate.label} ✗`);
+      if (result.stalled || result.hardCapped) {
+        hung = true;
+        failures += `\n${hangAdvice(gate, result)}`;
+      } else {
+        failures += `\n--- ristretto gate '${gate.label}' FAILED ---\n${result.output.split('\n').slice(-40).join('\n')}`;
+      }
     }
-  }
-  process.exit(0);
-}
-
-if (MODE === 'full') {
-  if (!fs.existsSync(markerPath)) process.exit(0); // only gate while a pull is active
-
-  // Tree unchanged since the last green run → already proven, skip.
-  const fp = treeFingerprint();
-  let lastGreen = null;
-  try { lastGreen = fs.readFileSync(greenPath, 'utf8'); } catch { /* no green run yet */ }
-  if (fp !== null && fp === lastGreen) process.exit(0);
-
-  let failures = '';
-  for (const gate of gateList(true)) {
-    const result = run(gate.cmd, timeouts[gate.key]);
-    if (result === null) continue;
-    if (result.timedOut) {
-      // Surface immediately. Blocking here would send the agent back to a gate that hangs
-      // again, burning the whole retry budget on the same wall — the exact wedge this avoids.
-      try { fs.mkdirSync(path.dirname(timeoutPath), { recursive: true }); fs.writeFileSync(timeoutPath, gate.label); } catch { /* best-effort */ }
-      console.error(timeoutAdvice(gate));
+    if (!results.length) {
+      console.log('gates: none configured — nothing to verify');
       process.exit(0);
     }
-    failures += `\n--- ristretto gate '${gate.label}' FAILED ---\n${result.output.split('\n').slice(-40).join('\n')}`;
-  }
-
-  if (!failures) {
-    try { fs.unlinkSync(retriesPath); } catch { /* never existed */ }
-    // Recompute — the gate commands themselves may have written artifacts.
-    const green = treeFingerprint();
-    if (green !== null) {
-      try { fs.writeFileSync(greenPath, green); } catch { /* cache is best-effort */ }
+    console.log(`gates: ${results.join(' ')}`);
+    if (failures) {
+      console.error(failures);
+      process.exit(1);
+    }
+    // A clean verify is the strongest green there is — seed the cache with it.
+    if (!hung) {
+      const green = treeFingerprint();
+      if (green !== null) {
+        try { fs.mkdirSync(path.dirname(greenPath), { recursive: true }); fs.writeFileSync(greenPath, green); } catch { /* best-effort */ }
+      }
     }
     process.exit(0);
   }
 
-  let retries = 0;
-  try { retries = parseInt(fs.readFileSync(retriesPath, 'utf8'), 10) || 0; } catch { /* first failure */ }
-  if (retries >= MAX_RETRIES) {
-    try { fs.unlinkSync(retriesPath); } catch { /* ignore */ }
-    console.error(`ristretto: gates still failing after ${MAX_RETRIES} forced retries — surfacing to user instead of looping.${failures}`);
-    process.exit(0);
+  if (MODE === 'full') {
+    if (!fs.existsSync(markerPath)) process.exit(0); // only gate while a pull is active
+
+    // Tree unchanged since the last green run → already proven, skip.
+    const fp = treeFingerprint();
+    let lastGreen = null;
+    try { lastGreen = fs.readFileSync(greenPath, 'utf8'); } catch { /* no green run yet */ }
+    if (fp !== null && fp === lastGreen) process.exit(0);
+
+    let failures = '';
+    for (const gate of gateList(true)) {
+      const result = await run(gate.cmd, budget(gate));
+      if (result === null) continue;
+      if (result.stalled || result.hardCapped) {
+        // Surface immediately. Blocking here would send the agent back to a gate that hangs
+        // again, burning the whole retry budget on the same wall — the exact wedge this avoids.
+        try { fs.mkdirSync(path.dirname(stalledPath), { recursive: true }); fs.writeFileSync(stalledPath, gate.label); } catch { /* best-effort */ }
+        console.error(hangAdvice(gate, result));
+        process.exit(0);
+      }
+      failures += `\n--- ristretto gate '${gate.label}' FAILED ---\n${result.output.split('\n').slice(-40).join('\n')}`;
+    }
+
+    if (!failures) {
+      try { fs.unlinkSync(retriesPath); } catch { /* never existed */ }
+      // Recompute — the gate commands themselves may have written artifacts.
+      const green = treeFingerprint();
+      if (green !== null) {
+        try { fs.writeFileSync(greenPath, green); } catch { /* cache is best-effort */ }
+      }
+      process.exit(0);
+    }
+
+    let retries = 0;
+    try { retries = parseInt(fs.readFileSync(retriesPath, 'utf8'), 10) || 0; } catch { /* first failure */ }
+    if (retries >= MAX_RETRIES) {
+      try { fs.unlinkSync(retriesPath); } catch { /* ignore */ }
+      console.error(`ristretto: gates still failing after ${MAX_RETRIES} forced retries — surfacing to user instead of looping.${failures}`);
+      process.exit(0);
+    }
+    fs.writeFileSync(retriesPath, String(retries + 1));
+    console.error(`ristretto: work is not done — deterministic gates failed. Fix these before stopping. Do NOT weaken, skip, or delete gates/tests to get green.${failures}`);
+    process.exit(2);
   }
-  fs.writeFileSync(retriesPath, String(retries + 1));
-  console.error(`ristretto: work is not done — deterministic gates failed. Fix these before stopping. Do NOT weaken, skip, or delete gates/tests to get green.${failures}`);
-  process.exit(2);
+
+  process.exit(0);
 }
 
-process.exit(0);
+main();

@@ -22,7 +22,7 @@ You are running **BREW** — an autonomous loop over the roadmap. The user batch
    ```
 
    plus one short barista quip, and — if features exist but all are blocked — a line naming what's blocked and why. If any row is `needs-ops` with unticked boxes, name those too, separately: they aren't waiting on refinement, they're waiting on you to run something.
-3. **Pre-flight — the repo must already be green.** Create `.ristretto.json` if missing, exactly as in `pull` step 3 — **including `testChanged`**, which is what keeps the loop's per-subagent gate from re-running the whole suite dozens of times, and `timeouts`. Then prove the tree once, before arming anything:
+3. **Pre-flight — the repo must already be green.** Create `.ristretto.json` if missing, exactly as in `pull` step 3 — and if the suite is slower than a minute, **set `testChanged`**, which is what keeps the loop's per-subagent gate from re-running the whole suite dozens of times. Then prove the tree once, before arming anything:
 
    ```
    node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.js" verify
@@ -38,11 +38,12 @@ You are running **BREW** — an autonomous loop over the roadmap. The user batch
 
    Do not create the marker, do not create the branch, do not dispatch anything. This check costs one test run and is the cheapest failure in the whole command — without it the first *planner* subagent trips the SubagentStop hook, gets retried three times, and surfaces a confusing block for a failure it did not cause and could not fix, having written no source at all.
 
-   **If a gate timed out rather than failed**, say exactly that and stop — a hang is not a red tree, and it is the one failure that will otherwise repeat at every single stop for the whole run:
+   **If a gate was killed as hung rather than failing**, say exactly that and stop — a hang is not a red tree, and it is the one failure that will otherwise repeat at every single stop for the whole run:
 
    ```
-   ⛔ ristretto: the <gate> gate hung (>Ns) — nothing brewed.
-      set gates.testChanged to a scoped command, or raise timeouts.<gate> in .ristretto.json.
+   ⛔ ristretto: the <gate> gate went silent for Ns and was killed — nothing brewed.
+      find what it's waiting on (open handle, port, watch mode), or raise
+      silence.<gate> in .ristretto.json if that tool is just quiet for long stretches.
    ```
 
 4. **Arm the gates**, exactly as in `pull`: create the marker `.ristretto/pulling`, and `.ristretto/build/` if it doesn't exist. The marker stays armed for the whole loop — the plugin's Stop **and SubagentStop** hooks run lint + typecheck + test while it exists, so every per-feature subagent is gated individually; a subagent cannot return "done" with red gates. Two things keep that affordable across a long batch: the gate runner fingerprints a green tree and skips re-running on an unchanged one (so reviewers and closers, which change nothing, don't pay a test run at every stop), and while the loop is running the test gate is the **scoped** `testChanged` command — only what the current feature touched. Repo-wide proof happens once, after the loop.
@@ -117,9 +118,9 @@ While an eligible feature exists:
      ```
 
      This is the known cost of scoping tests during the loop, and it's the right trade — a fast batch with one honest red at the end beats a batch too slow to finish. What isn't acceptable is a quiet one.
-   - **A timed-out gate** is neither: report the batch as unverified, name the gate, and point at `gates.testChanged` / `timeouts` in `.ristretto.json`.
+   - **A gate killed as hung** is neither: report the batch as unverified, name the gate, and point at what it might be waiting on / `silence` in `.ristretto.json`.
 
-2. **Disarm the gates:** delete `.ristretto/pulling`, and `.ristretto/gate-retries` / `.ristretto/gate-timeout` if present, and delete any remaining `.ristretto/build/` files. Do this even if the loop aborts.
+2. **Disarm the gates:** delete `.ristretto/pulling`, and `.ristretto/gate-retries` / `.ristretto/gate-stalled` if present, and delete any remaining `.ristretto/build/` files. Do this even if the loop aborts.
 3. **Report:** the full-suite verdict, features brewed (with commit hashes), features `needs-ops` (each with its op), features `blocked` (each with its spec gap — suggest refining them and re-running), the branch name, and any suggestions the subagents surfaced — do not add those to the roadmap and do not fix them.
 
    If any ops are outstanding, close with the checklist pointer — this is the whole point of writing them down:
