@@ -53,6 +53,10 @@ The plugin ships deterministic gate hooks: while a pull is active, a Stop hook r
 
    `{file}` is replaced with the touched file (format only). `.ristretto.json` belongs in git; also add `.ristretto/` (transient state) to `.gitignore` if it isn't there.
 
+   **Every command must be self-contained.** The hooks run in their own environment and **do not inherit a PATH you exported in your shell**. If a repo needs a specific toolchain — a second SDK install, a version manager shim, a workaround build — put that path in the command itself (`C:\flutter\bin\flutter test`, `./node_modules/.bin/vitest run`). A gate that only works because of a PATH tweak you made by hand will pass your pre-flight and fail in the hook, on a tree you never touched, and the red will look like a repo problem. `verify` records which binary it resolved and the hook says so out loud when it resolves a different one — but the fix is to not let them differ.
+
+   For the same reason: **never run the gates by hand to check them.** Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.js" verify`, plainly, with no environment of your own. That's the only run that reproduces what the hook does.
+
    **Set `testChanged` when the full suite takes more than a minute** — it is what keeps the loop fast on a real repo. It runs only the tests affected by what this feature touched; the full suite is proven once at the end, by `verify`. `{files}` is replaced with every modified *and untracked* path:
 
    | runner | `testChanged` |

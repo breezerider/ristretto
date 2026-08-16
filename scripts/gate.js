@@ -46,6 +46,7 @@ const markerPath = path.join(projectDir, '.ristretto', 'pulling');
 const retriesPath = path.join(projectDir, '.ristretto', 'gate-retries');
 const greenPath = path.join(projectDir, '.ristretto', 'gate-green');
 const stalledPath = path.join(projectDir, '.ristretto', 'gate-stalled');
+const toolsPath = path.join(projectDir, '.ristretto', 'gate-tools.json');
 
 // No config → ristretto not set up in this repo → never interfere.
 if (!fs.existsSync(configPath)) process.exit(0);
@@ -215,6 +216,61 @@ function gateList(scoped) {
 
 const budget = (gate) => ({ silenceSec: silence[gate.key], hardCapSec: hardCaps[gate.key] });
 
+// --- Which binary is this gate actually going to run? ---
+// A pre-flight run by the agent and a gate run by the hook inherit different environments. If
+// the agent prepends a workaround toolchain to PATH, `verify` proves a green tree that the hook
+// will never reproduce — and the hook's red looks like a repo problem instead of two Flutters.
+// So verify records what it resolved, and the hook says so plainly when it resolved something else.
+
+// First word of a shell command, minus quotes and any leading VAR=value assignments.
+function firstToken(cmd) {
+  for (const word of String(cmd).trim().split(/\s+/)) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) continue; // env prefix, not the program
+    return word.replace(/^["']|["']$/g, '');
+  }
+  return '';
+}
+
+function resolveTool(tok) {
+  if (!tok || tok.includes('/') || tok.includes('\\')) return tok || null; // already a path
+  try {
+    const probe = process.platform === 'win32'
+      ? spawnSync('where', [tok], { encoding: 'utf8' })
+      : spawnSync('/bin/sh', ['-c', `command -v ${tok}`], { encoding: 'utf8' });
+    const line = (probe.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean)[0];
+    return line || null;
+  } catch {
+    return null;
+  }
+}
+
+// { flutter: "/usr/bin/flutter", npx: "/usr/local/bin/npx" } for every configured gate command.
+function resolveGateTools() {
+  const tools = {};
+  for (const cmd of Object.values(gates)) {
+    if (!cmd) continue;
+    const tok = firstToken(cmd);
+    if (tok && !(tok in tools)) tools[tok] = resolveTool(tok);
+  }
+  return tools;
+}
+
+// Lines describing every tool the hook resolves differently from the recorded verify run.
+function toolDrift(now) {
+  let recorded = null;
+  try { recorded = JSON.parse(fs.readFileSync(toolsPath, 'utf8')); } catch { return []; }
+  const drift = [];
+  for (const [tok, was] of Object.entries(recorded)) {
+    const is = now[tok];
+    if (tok in now && was !== is) {
+      drift.push(`ristretto: '${tok}' is not the one that was verified — verify used ${was || '(unresolved)'}, this gate ran ${is || '(unresolved)'}.`);
+      drift.push(`  A green pre-flight proves nothing about a different toolchain. Put the intended path in .ristretto.json`);
+      drift.push(`  (the hooks do not inherit a PATH you exported in your shell), or fix the install so both resolve the same.`);
+    }
+  }
+  return drift;
+}
+
 function hangAdvice(gate, result) {
   const why = result.stalled
     ? `printed nothing for ${silence[gate.key]}s and was killed — it is hung, not slow`
@@ -262,6 +318,12 @@ async function main() {
       process.exit(0);
     }
     console.log(`gates: ${results.join(' ')}`);
+    // Record and show the toolchain this verdict was produced with, so a hook that resolves
+    // something else can say so instead of surfacing a mystery red on an untouched tree.
+    const tools = resolveGateTools();
+    const shown = Object.entries(tools).map(([tok, at]) => `${tok} → ${at || '(not found)'}`);
+    if (shown.length) console.log(`tools: ${shown.join('  ')}`);
+    try { fs.mkdirSync(path.dirname(toolsPath), { recursive: true }); fs.writeFileSync(toolsPath, JSON.stringify(tools, null, 2)); } catch { /* best-effort */ }
     if (failures) {
       console.error(failures);
       process.exit(1);
@@ -285,6 +347,10 @@ async function main() {
     try { lastGreen = fs.readFileSync(greenPath, 'utf8'); } catch { /* no green run yet */ }
     if (fp !== null && fp === lastGreen) process.exit(0);
 
+    // Did the pre-flight prove a green tree with a different toolchain than this hook runs?
+    const drift = toolDrift(resolveGateTools());
+    const driftNote = drift.length ? `\n${drift.join('\n')}\n` : '';
+
     let failures = '';
     for (const gate of gateList(true)) {
       const result = await run(gate.cmd, budget(gate));
@@ -293,13 +359,14 @@ async function main() {
         // Surface immediately. Blocking here would send the agent back to a gate that hangs
         // again, burning the whole retry budget on the same wall — the exact wedge this avoids.
         try { fs.mkdirSync(path.dirname(stalledPath), { recursive: true }); fs.writeFileSync(stalledPath, gate.label); } catch { /* best-effort */ }
-        console.error(hangAdvice(gate, result));
+        console.error(driftNote + hangAdvice(gate, result));
         process.exit(0);
       }
       failures += `\n--- ristretto gate '${gate.label}' FAILED ---\n${result.output.split('\n').slice(-40).join('\n')}`;
     }
 
     if (!failures) {
+      if (driftNote) console.error(driftNote.trim());
       try { fs.unlinkSync(retriesPath); } catch { /* never existed */ }
       // Recompute — the gate commands themselves may have written artifacts.
       const green = treeFingerprint();
@@ -313,11 +380,11 @@ async function main() {
     try { retries = parseInt(fs.readFileSync(retriesPath, 'utf8'), 10) || 0; } catch { /* first failure */ }
     if (retries >= MAX_RETRIES) {
       try { fs.unlinkSync(retriesPath); } catch { /* ignore */ }
-      console.error(`ristretto: gates still failing after ${MAX_RETRIES} forced retries — surfacing to user instead of looping.${failures}`);
+      console.error(`${driftNote}ristretto: gates still failing after ${MAX_RETRIES} forced retries — surfacing to user instead of looping.${failures}`);
       process.exit(0);
     }
     fs.writeFileSync(retriesPath, String(retries + 1));
-    console.error(`ristretto: work is not done — deterministic gates failed. Fix these before stopping. Do NOT weaken, skip, or delete gates/tests to get green.${failures}`);
+    console.error(`${driftNote}ristretto: work is not done — deterministic gates failed. Fix these before stopping. Do NOT weaken, skip, or delete gates/tests to get green.${failures}`);
     process.exit(2);
   }
 

@@ -28,6 +28,8 @@ You are running **BREW** — an autonomous loop over the roadmap. The user batch
    node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.js" verify
    ```
 
+   **Run it exactly like that — bare.** Do not prepend to PATH, do not substitute a different toolchain, do not run the underlying test command yourself "to check". The hooks inherit none of that, so any environment you add makes this pre-flight prove a tree the hooks will never reproduce, and the first subagent goes red on code nobody touched. If a specific toolchain is required, it belongs *inside* `.ristretto.json`, not around the command. (`verify` prints and records the binary each gate resolved; a hook that resolves a different one will name the mismatch rather than blaming the repo.)
+
    Exit 0 → carry on. Exit 1 → stop immediately:
 
    ```

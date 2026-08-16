@@ -18,11 +18,11 @@ const SLOW = `node -e "let n=0; const t=setInterval(()=>{console.log('tick'+(++n
 // Prints once, then goes quiet forever — the shape of a real hang (suite starts, then wedges).
 const STALL = `node -e "console.log('starting'); setTimeout(()=>{}, 60000)"`;
 
-function gate(dir, mode, stdin = '{}') {
+function gate(dir, mode, stdin = '{}', env = {}) {
   return spawnSync(process.execPath, [GATE, mode], {
     input: stdin,
     encoding: 'utf8',
-    env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+    env: { ...process.env, CLAUDE_PROJECT_DIR: dir, ...env },
   });
 }
 
@@ -243,5 +243,45 @@ dir = tmpRepo(JSON.stringify({ gates: {} }));
 r = gate(dir, 'verify');
 assert.strictEqual(r.status, 0);
 assert.ok(r.stdout.includes('none configured'), 'verify must say when there was nothing to run');
+
+// --- Toolchain drift: a pre-flight proved with a different binary than the hook runs. ---
+// The real-world shape: two installs of the same tool on one machine, the agent prepends the
+// working one to PATH for its pre-flight, and the hook — which inherits no such thing — runs
+// the other and goes red on an untouched tree. The red looks like a repo problem. It isn't.
+if (process.platform !== 'win32') {
+  const mkTool = (name, body) => {
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ristretto-bin-'));
+    const exe = path.join(binDir, name);
+    fs.writeFileSync(exe, `#!/bin/sh\n${body}\n`);
+    fs.chmodSync(exe, 0o755);
+    return binDir;
+  };
+  const goodBin = mkTool('faketool', 'echo "1068 tests passed"; exit 0');
+  const badBin = mkTool('faketool', 'echo "2 tests failed: shader manifest"; exit 1');
+
+  // 25. verify records the toolchain it proved the tree with, and shows it.
+  dir = tmpRepo(JSON.stringify({ gates: { test: 'faketool' } }));
+  r = gate(dir, 'verify', '{}', { PATH: `${goodBin}:${process.env.PATH}` });
+  assert.strictEqual(r.status, 0, 'the good toolchain must verify green');
+  assert.ok(r.stdout.includes(`faketool → ${goodBin}/faketool`), 'verify must show which binary it used');
+  const recorded = JSON.parse(fs.readFileSync(path.join(dir, '.ristretto', 'gate-tools.json'), 'utf8'));
+  assert.strictEqual(recorded.faketool, `${goodBin}/faketool`, 'verify must record the resolved binary');
+
+  // 26. The hook resolving a DIFFERENT binary names the drift, so the red is explained rather
+  //     than blamed on the repo. This is the whole point: the pre-flight proved nothing here.
+  arm(dir);
+  r = gate(dir, 'full', '{}', { PATH: `${badBin}:${process.env.PATH}` });
+  assert.strictEqual(r.status, 2, 'a red gate still blocks');
+  assert.ok(r.stderr.includes('is not the one that was verified'), 'the drift must be called out');
+  assert.ok(r.stderr.includes(goodBin) && r.stderr.includes(badBin), 'both binaries must be named');
+  assert.ok(r.stderr.includes('do not inherit a PATH you exported'), 'the advice must name the actual cause');
+  assert.ok(r.stderr.includes('shader manifest'), 'the underlying failure must still be reported');
+
+  // 27. Same binary → no noise. The warning must only fire on a genuine mismatch.
+  fs.rmSync(path.join(dir, '.ristretto', 'gate-retries'), { force: true });
+  r = gate(dir, 'full', '{}', { PATH: `${goodBin}:${process.env.PATH}` });
+  assert.strictEqual(r.status, 0, 'the verified toolchain must pass');
+  assert.ok(!r.stderr.includes('is not the one that was verified'), 'no drift warning when nothing drifted');
+}
 
 console.log('gate.test.js: all checks passed');
