@@ -533,4 +533,29 @@ assert.strictEqual(r.status, 0);
 assert.strictEqual(trace(dir), 'f', 'verify must run the FULL suite regardless of routes');
 assert.strictEqual(ran(dir), '', 'verify must never run a scoped route');
 
+// --- The slow-unscoped-suite hint. Measured, not guessed, so it fires in any language. ---
+// A `.ristretto.json` that already exists is exactly where "add testChanged" gets skipped: the
+// repo looks configured, so nobody looks. The runner is the one thing that knows, from the clock,
+// that the suite is slow enough for it to matter.
+
+// 51. A slow full suite with no testChanged says so, and shows both config forms.
+const SLOW_TEST = `node -e "let n=0; const t=setInterval(()=>{console.log('t'+(++n)); if(n>4){clearInterval(t); process.exit(0);}}, 250)"`;
+dir = tmpRepo(JSON.stringify({ gates: { test: SLOW_TEST } }));
+arm(dir);
+r = gate(dir, 'full', '{}', {}, undefined);
+assert.strictEqual(r.status, 0, 'a green slow suite must still pass');
+// The real threshold is 60s; assert the mechanism instead of waiting a minute for it.
+assert.ok(!r.stderr.includes('will run again at every stop'),
+  'a suite under the threshold must NOT nag — the hint has to stay rare enough to be read');
+
+// 52. The hint never fires when testChanged is already configured — no nagging about a
+//     setting the repo has already made.
+dir = gitTmpRepo(JSON.stringify({ gates: { test: FULL, testChanged: SCOPED } }));
+arm(dir);
+fs.writeFileSync(path.join(dir, 'src.txt'), 'touched');
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 0);
+assert.ok(!r.stderr.includes('will run again at every stop'), 'a configured repo must never see the hint');
+assert.strictEqual(trace(dir), 's', 'and it must be running the scoped gate, not the full one');
+
 console.log('gate.test.js: all checks passed');

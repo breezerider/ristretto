@@ -76,6 +76,11 @@ const DEFAULT_SILENCE = { format: 30, lint: 600, typecheck: 600, test: 300, test
 // exception: it's a per-keystroke convenience on a single file, and its hook is capped anyway.
 const DEFAULT_HARD_CAP = { format: 30 };
 
+// An unscoped test gate that runs longer than this is worth saying something about: it will be
+// paid again at every stop for the rest of the run. Measured, not guessed — a repo whose suite
+// is genuinely quick never sees the hint, whatever language it is written in.
+const SLOW_TEST_HINT_MS = 60 * 1000;
+
 const POLL_MS = 1000;
 const MAX_CAPTURE = 2 * 1024 * 1024; // keep the tail of the output, not all of it
 
@@ -642,9 +647,17 @@ async function main() {
     const driftNote = drift.length ? `\n${drift.join('\n')}\n` : '';
 
     let failures = '';
+    let unscopedTestMs = 0;
     for (const gate of gateList(true)) {
+      const gateStartedAt = Date.now();
       const result = await run(gate.cmd, budget(gate));
-      if (result === null) continue;
+      if (result === null) {
+        // A full suite ran because nothing scoped it. Remember how long that cost — the config
+        // instruction to add `testChanged` is easy to skip on a repo that already looks set up,
+        // and this is the one place that knows, from measurement, that it was worth doing.
+        if (gate.key === 'test' && !gates.testChanged) unscopedTestMs = Date.now() - gateStartedAt;
+        continue;
+      }
       if (result.stalled || result.hardCapped) {
         // Surface immediately. Blocking here would send the agent back to a gate that hangs
         // again, burning the whole retry budget on the same wall — the exact wedge this avoids.
@@ -657,6 +670,12 @@ async function main() {
 
     if (!failures) {
       if (driftNote) console.error(driftNote.trim());
+      if (unscopedTestMs >= SLOW_TEST_HINT_MS) {
+        console.error(`ristretto: the full test suite took ${Math.round(unscopedTestMs / 1000)}s, and it will run again at every stop — no "gates"."testChanged" is configured.`);
+        console.error('  Scope the loop to what each feature touches; the whole repo is still proven by `gate.js verify` at the end.');
+        console.error('  One runner:  "testChanged": "<related-tests command> {files}"');
+        console.error('  Several:     "testChanged": [{ "match": ["backend/**/*.py"], "cmd": "..." }, { "match": ["frontend/**"], "cmd": "..." }]');
+      }
       try { fs.unlinkSync(retriesPath); } catch { /* never existed */ }
       // Recompute — the gate commands themselves may have written artifacts.
       const green = treeFingerprint();

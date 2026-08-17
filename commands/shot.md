@@ -7,6 +7,14 @@ You are running **SHOT** — prep and pull one small feature in a single pass. A
 
 Feature: $ARGUMENTS  (add `nocommit` to skip the commit at the end)
 
+## 0. Check the project's format version — before anything else
+
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/version.js" check
+```
+
+Exit 0 → continue. Exit 1 → **the project's files are in an older shape than this version reads.** Run `/ristretto:migrate` first: tell the user what is happening, migrate `docs/ristretto/`, then come back and continue here. Do not proceed on an unmigrated project — a status or field this version doesn't recognise gets read as something else, silently, and the first sign of it is a wrong decision much further down. Exit 2, or "PROJECT IS NEWER" → stop and report; that is a stale plugin install, not a stale project.
+
 Ensure `docs/ristretto/` exists (`roadmap.md`, `plans/`, `plans/archived/`) — create if missing.
 
 1. **Plan, briefly — same standard as `prep`, no bypass lane.** Write `docs/ristretto/plans/<FEATURE-ID>.md` in prep's format: `## Spec` (goal), `## Contract` (**1–3 acceptance criteria that are checkable** by a test, a measurement, or a binary observation, plus `Provides:` — the public surface at type level — and any decisions), `## Approach` (short strategy, likely touchpoints). **No code in the plan.** If you can't state checkable criteria **or fill `Provides:`** on the spot, this isn't a shot — stop and route it to `/ristretto:prep` (nothing is lost; shot hasn't touched code yet). Add a `planned` row to the roadmap — a single shot is standalone, so its `Flight` is `—` and it has no `Depends:`.

@@ -6,6 +6,14 @@ You are running **BREW** — an autonomous loop over the roadmap. The user batch
 
 **You are the orchestrator, not the implementer.** Each feature runs through fresh subagents — a planner, an implementer, an independent reviewer, and a closer; your context holds only bookkeeping and one-line results. Do not read the codebase, the plans, or any diffs yourself — a large batch must not grow the main conversation. Each subagent starts clean, sees exactly one job, and dies with all its noise; the reviewer's fresh context is also what makes the review independent — it never saw the implementer's reasoning.
 
+## 0. Check the project's format version — before anything else
+
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/version.js" check
+```
+
+Exit 0 → continue. Exit 1 → **the project's files are in an older shape than this version reads.** Run `/ristretto:migrate` first: tell the user what is happening, migrate `docs/ristretto/`, then come back and continue here. Do not proceed on an unmigrated project — a status or field this version doesn't recognise gets read as something else, silently, and the first sign of it is a wrong decision much further down. Exit 2, or "PROJECT IS NEWER" → stop and report; that is a stale plugin install, not a stale project.
+
 ## Before the loop
 
 1. Read `docs/ristretto/roadmap.md` (the one file you do read — it's the index, built to be read in ten seconds). If it doesn't exist, tell the user to run `/ristretto:prep` first and stop.

@@ -17,6 +17,14 @@ When `raw` is passed: skip step 3 (no marker, so the hooks stay disarmed — the
 
 Everything below assumes a normal pull unless it says otherwise.
 
+## 0. Check the project's format version — before anything else
+
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/version.js" check
+```
+
+Exit 0 → continue. Exit 1 → **the project's files are in an older shape than this version reads.** Run `/ristretto:migrate` first: tell the user what is happening, migrate `docs/ristretto/`, then come back and continue here. Do not proceed on an unmigrated project — a status or field this version doesn't recognise gets read as something else, silently, and the first sign of it is a wrong decision much further down. Exit 2, or "PROJECT IS NEWER" → stop and report; that is a stale plugin install, not a stale project.
+
 ## 1. Read the roadmap first — trust it
 
 Read `docs/ristretto/roadmap.md` before anything else. The roadmap is the source of truth; take it at its word. Don't scan the codebase to second-guess its status — keeping it honest is the developer's call.
@@ -37,7 +45,19 @@ Open `docs/ristretto/plans/<FEATURE-ID>.md`. **`## Contract` is binding** — ac
 
 The plugin ships deterministic gate hooks: while a pull is active, a Stop hook runs the repo's lint + typecheck + test and blocks you (exit 2) until they're green — enforced, not self-reported. (Skip this whole step under `raw`.)
 
-1. **If `.ristretto.json` is missing at the repo root, create it now.** **Read the repo's `CLAUDE.md` / `AGENTS.md` first** — a repo that documents its own commands has already answered this, and what's written there wins over anything you infer (`pnpm test:ci`, not `pnpm test`). Otherwise detect the stack (`angular.json` → Angular, `next.config.*` → Next.js, `pubspec.yaml` → Flutter; else read `package.json` scripts) and write the resolved commands — adopt whatever format/lint/typecheck/test tooling the repo already uses (read its existing config), never impose new tools. Leave a gate as `""` only if the repo genuinely has no such tool; empty gates are skipped.
+1. **Read `.ristretto.json` — create it if missing, and complete it if it predates a key.**
+
+   **If it is missing:** **read the repo's `CLAUDE.md` / `AGENTS.md` first** — a repo that documents its own commands has already answered this, and what's written there wins over anything you infer (`pnpm test:ci`, not `pnpm test`). Otherwise detect the stack (`angular.json` → Angular, `next.config.*` → Next.js, `pubspec.yaml` → Flutter; else read `package.json` scripts) and write the resolved commands — adopt whatever format/lint/typecheck/test tooling the repo already uses (read its existing config), never impose new tools. Leave a gate as `""` only if the repo genuinely has no such tool; empty gates are skipped.
+
+   **If it already exists, do not just move on.** A config written by an older version is missing the keys that keep a real repo fast, and an existing file is exactly the case where that gets skipped — the repo looks configured, so nobody looks. Check these three and add whichever are absent, then say in your summary that you migrated it:
+
+   | key | add it when | why it matters |
+   |---|---|---|
+   | `testChanged` | the full `test` gate takes more than a minute | without it every single subagent stop runs the whole suite — on a slow repo that is the difference between a batch and a batch that never finishes |
+   | `formatPaths` | a `format` gate is set | an unscoped formatter rewrites documentation and generated files, and each fix re-triggers it |
+   | `silence` / `timeouts` / `lockWait` | only when a default is actually wrong for this repo | leave them alone otherwise; the defaults are per gate kind and hold across stacks |
+
+   Adding a missing key is a **migration, not a preference** — do it without asking. Changing a command the user already wrote is the opposite: leave it alone and mention it instead.
 
    ```json
    {

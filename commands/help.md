@@ -44,10 +44,16 @@ THE REST OF THE MENU
                                     filters: open | done | blocked | checks | ID | flight
   /ristretto:tamp [target] [fix]    lean-code review of a diff/file: waste,
                                     duplication, over-build. "fix" applies.
+  /ristretto:migrate                bring docs/ristretto/ up to the current format.
+                                    runs automatically when a command finds an
+                                    out-of-date project; announces before touching.
   /ristretto:help                   this menu.
 
 HOUSE RULES
   • specs first — nothing is built that isn't planned with checkable criteria.
+  • the roadmap records the format it was written for. a project older than
+    the plugin is migrated first, and you are told before it happens —
+    a renamed status read as something else is a silent wrong answer.
   • planned means DECIDED — brew never stops to ask. every ruling is made in
     prep (roast mode roasts them out), so a question at 3am is a prep bug.
     brew goes as far as it possibly can, every time.

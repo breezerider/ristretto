@@ -9,6 +9,14 @@ Inputs to prep: $ARGUMENTS  (add `deep` to force roast mode on every input)
 
 Each input is one of: a **tracked feature** (has an ID like `BREW-224` — keep that ID exactly, it's how the work is tracked in git), a **raw idea** you want to build, or a **feature too big** to plan as one unit.
 
+## 0. Check the project's format version — before anything else
+
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/version.js" check
+```
+
+Exit 0 → continue. Exit 1 → **the project's files are in an older shape than this version reads.** Run `/ristretto:migrate` first: tell the user what is happening, migrate `docs/ristretto/`, then come back and continue here. Do not proceed on an unmigrated project — a status or field this version doesn't recognise gets read as something else, silently, and the first sign of it is a wrong decision much further down. Exit 2, or "PROJECT IS NEWER" → stop and report; that is a stale plugin install, not a stale project.
+
 ## Setup
 
 Work against the project roadmap at `docs/ristretto/`. Create these if missing — do not ask, just create:
@@ -21,10 +29,13 @@ If `roadmap.md` is new, start it with this table:
 
 ```
 # Ristretto Roadmap
+<!-- ristretto-format: x.y -->
 
 | Flight | Feature | Title | Status | Plan | Updated |
 |--------|---------|-------|--------|------|---------|
 ```
+
+Don't write the stamp by hand — create the roadmap, then run `node "${CLAUDE_PLUGIN_ROOT}/scripts/version.js" stamp`, which fills in the version this plugin actually is. A hand-typed version is a guess, and a wrong one sends the next command into a migration the project doesn't need.
 
 Status values: `planned` · `in-progress` · `blocked` · `needs-human` · `done`.
 `blocked` is set by `pull`/`brew` when a feature can't proceed without a **decision** — the row carries a one-line reason. Re-prepping a `blocked` feature (refining its plan to resolve the reason) flips it back to `planned`.
