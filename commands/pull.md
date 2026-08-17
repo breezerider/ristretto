@@ -23,7 +23,7 @@ Everything below assumes a normal pull unless it says otherwise.
 node "${CLAUDE_PLUGIN_ROOT}/scripts/version.js" check
 ```
 
-Exit 0 → continue. Exit 1 → **the project's files are in an older shape than this version reads.** Run `/ristretto:migrate` first: tell the user what is happening, migrate `docs/ristretto/`, then come back and continue here. Do not proceed on an unmigrated project — a status or field this version doesn't recognise gets read as something else, silently, and the first sign of it is a wrong decision much further down. Exit 2, or "PROJECT IS NEWER" → stop and report; that is a stale plugin install, not a stale project.
+Exit 0 → continue. Exit 1 → **the project's files are in an older shape than this version reads.** Read `${CLAUDE_PLUGIN_ROOT}/docs/format-migration.md` and apply it — it tells the user what is happening, brings `docs/ristretto/` up to date, and hands back here to continue. It is plumbing, not an errand: the user asked for this command, not for a migration. Do not proceed on an unmigrated project — a status or field this version doesn't recognise gets read as something else, silently, and the first sign of it is a wrong decision much further down. Exit 2, or "PROJECT IS NEWER" → stop and report; that is a stale plugin install, not a stale project.
 
 ## 1. Read the roadmap first — trust it
 
@@ -272,7 +272,7 @@ Once criteria are met:
    - **Default: keep the subject plain.** ASCII, one line, no backticks, `@`, `$`, `!`, or quote characters. Almost every summary can be written this way, and then a plain `-m` is safe on every shell.
    - **If the summary genuinely needs those characters, or spans more than one line:** write the message to a file and commit with `git commit -F <path>`, then delete the file. Do **not** reach for a heredoc — it is unreliable in this environment.
    - **Never** repair a bad message with `--amend`. If a message came out wrong, that is worth reporting; rewriting history is not on the table.
-   - **Never** push, set an upstream, `--force`, amend or reset existing commits, or open a PR. Local and append-only.
+   - **Never** push, set an upstream, `--force`, reset, or open a PR. Local and append-only. `--amend` has exactly one legal use: fixing the message of the commit you just made, when nothing has been committed since — say so when you use it. Never amend to change content, and never amend a commit you didn't just create.
 2. **Correct `Provides:` to whatever was actually built**, then append an `## Evidence` section to the plan (the proof from step 9, a one-line gate summary like `gates: lint ✓ typecheck ✓ test ✓`, and the review verdict — `review: clean`, `review: N findings resolved`, `review: skipped (trivial diff)`, or `review: skipped (raw)`), then move `docs/ristretto/plans/<FEATURE-ID>.md` → `docs/ristretto/plans/archived/<FEATURE-ID>.md`. A `Provides:` that drifted during implementation and was never corrected poisons every dependent feature — the archived plan is what the next feature's planner reads as fact.
 3. Update the roadmap row: set Updated to today, append the files touched and the commit hash (or `uncommitted` if `nocommit`, plus `raw` if this was a raw pull), and set the status:
    - **`done`** — every acceptance criterion is proven.

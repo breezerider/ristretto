@@ -35,7 +35,7 @@ function pluginFormatVersion() {
   return `${m[1]}.${m[2]}`;
 }
 
-// -1 / 0 / 1, comparing MAJOR.MINOR numerically. "0.9" is older than "0.14", which is exactly
+// -1 / 0 / 1, comparing MAJOR.MINOR numerically. "0.9" is older than "0.13", which is exactly
 // the comparison a string compare gets wrong.
 function compare(a, b) {
   const [aMaj, aMin] = a.split('.').map(Number);
@@ -91,7 +91,7 @@ const stamped = found ? found[1] : null;
 
 if (stamped === null) {
   console.log(`format: project UNSTAMPED, plugin ${current} — migration needed`);
-  console.log('  A roadmap with no stamp predates format versioning (0.13 or earlier).');
+  console.log('  A roadmap with no stamp predates format versioning (0.12 or earlier).');
   process.exit(1);
 }
 

@@ -44,15 +44,12 @@ THE REST OF THE MENU
                                     filters: open | done | blocked | checks | ID | flight
   /ristretto:tamp [target] [fix]    lean-code review of a diff/file: waste,
                                     duplication, over-build. "fix" applies.
-  /ristretto:migrate                bring docs/ristretto/ up to the current format.
-                                    runs automatically when a command finds an
-                                    out-of-date project; announces before touching.
   /ristretto:help                   this menu.
 
 HOUSE RULES
   • specs first — nothing is built that isn't planned with checkable criteria.
-  • the roadmap records the format it was written for. a project older than
-    the plugin is migrated first, and you are told before it happens —
+  • the roadmap records the format it was written for. a project older
+    than the plugin is brought up to date automatically, and says so —
     a renamed status read as something else is a silent wrong answer.
   • planned means DECIDED — brew never stops to ask. every ruling is made in
     prep (roast mode roasts them out), so a question at 3am is a prep bug.
@@ -87,7 +84,8 @@ HOUSE RULES
   • independent review — before any commit, a fresh subagent that never saw
     the implementation judges the diff (bugs first, then lean). bugs must be
     fixed; 2 rounds (brew gets a 3rd on a stronger model), then it surfaces
-    instead of looping. trivial diffs skip.
+    instead of looping. trivial diffs skip. round 2 can be scoped down to a
+    confirmation pass — never to nothing. a fix is code no one reviewed yet.
   • skip, never guess — undecidable → blocked with the spec gap named.
   • git: feature branches, one commit per feature, NEVER pushes. reviewing
     and pushing is yours.

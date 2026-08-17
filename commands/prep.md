@@ -15,7 +15,7 @@ Each input is one of: a **tracked feature** (has an ID like `BREW-224` — keep 
 node "${CLAUDE_PLUGIN_ROOT}/scripts/version.js" check
 ```
 
-Exit 0 → continue. Exit 1 → **the project's files are in an older shape than this version reads.** Run `/ristretto:migrate` first: tell the user what is happening, migrate `docs/ristretto/`, then come back and continue here. Do not proceed on an unmigrated project — a status or field this version doesn't recognise gets read as something else, silently, and the first sign of it is a wrong decision much further down. Exit 2, or "PROJECT IS NEWER" → stop and report; that is a stale plugin install, not a stale project.
+Exit 0 → continue. Exit 1 → **the project's files are in an older shape than this version reads.** Read `${CLAUDE_PLUGIN_ROOT}/docs/format-migration.md` and apply it — it tells the user what is happening, brings `docs/ristretto/` up to date, and hands back here to continue. It is plumbing, not an errand: the user asked for this command, not for a migration. Do not proceed on an unmigrated project — a status or field this version doesn't recognise gets read as something else, silently, and the first sign of it is a wrong decision much further down. Exit 2, or "PROJECT IS NEWER" → stop and report; that is a stale plugin install, not a stale project.
 
 ## Setup
 

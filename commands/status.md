@@ -7,7 +7,7 @@ You are running **STATUS**. This is **read-only** — do not create, modify, arc
 
 Filter (optional): $ARGUMENTS
 
-0. Check the format first: `node "${CLAUDE_PLUGIN_ROOT}/scripts/version.js" check`. On exit 1, print one line above the gauge — `⚙ this project is on an older ristretto format — run /ristretto:migrate` — and then **carry on and print the status anyway**. This command is read-only and it is what people run to orient themselves; refusing to show the roadmap because of a format mismatch would be the least helpful possible moment to stop. Just don't let a stale row read as current.
+0. Check the format first: `node "${CLAUDE_PLUGIN_ROOT}/scripts/version.js" check`. On exit 1, print one line above the gauge — `⚙ this project was written for an older ristretto format — the next prep/pull/brew will bring it up to date` — and then **carry on and print the status anyway**. This command is read-only and it is what people run to orient themselves; refusing to show the roadmap because of a format mismatch would be the least helpful possible moment to stop. Just don't let a stale row read as current.
 1. Read `docs/ristretto/roadmap.md`. If it doesn't exist, tell the user there's no roadmap yet and to run `/ristretto:prep` to start one, then stop.
 2. **Brew gauge.** Lead with a 10-segment gauge of done / total, filled proportionally (round to nearest segment), e.g.:
    `☕ [█████░░░░░] 5/10 brewed`

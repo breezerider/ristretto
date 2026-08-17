@@ -1,39 +1,26 @@
----
-description: Bring this project's roadmap, plans, and gate config up to the current ristretto format. Runs automatically when a command finds an out-of-date project; you can also run it directly.
----
+# Format migration
 
-You are running **MIGRATE** — bringing `docs/ristretto/` up to the format this version of ristretto reads and writes.
+**This is not a command.** No one runs it, and it is not in the menu — a user should never have to know their project has a format. A command that finds an out-of-date project reads this file and applies it, then carries on with what it was actually asked to do.
 
 Nothing here is a product decision. You are changing the *shape* of records, never their meaning: no criterion is added, removed, or reworded, no status is invented, no plan is re-planned. If a migration step would require deciding something, it doesn't — stop and say so instead.
 
-## 1. Establish where the project actually is
+## 1. Say what is about to happen
+
+You already know the project is behind — that's why you're reading this. Announce it before touching anything. Not optional, and not a progress note: this rewrites plans the user wrote, and they should know as it happens rather than find it in a diff later.
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/version.js" check
+⚙ ristretto: this project was written for format <old>; this is <new>.
+  Bringing docs/ristretto/ up to date first — <n> plan(s), the roadmap, and .ristretto.json.
+  Shape only: no criterion, decision, or status meaning changes.
 ```
 
-- **exit 0** → nothing to do. Say so in one line and stop. (This includes a repo with no roadmap yet: `prep` creates it already stamped.)
-- **exit 2** → the check itself couldn't run. Report what it said and stop; don't guess.
-- **"PROJECT IS NEWER"** → **stop.** The install is stale, not the project. Migrating would rewrite these files into an older shape and lose whatever the newer format records. Tell the user to update the plugin.
-- **exit 1 otherwise** → migrate, starting with step 2.
+If the working tree is dirty, say the migration will be mixed into their uncommitted work, and offer to stop so they can commit first — it is far easier to review as its own diff.
 
-## 2. Tell the user before touching anything
+## 2. Apply every block below the project's recorded format
 
-This is not optional and it is not a progress note. A migration rewrites plans they wrote, and they must know it happened *before* it does, not discover it in a diff later:
+Each block is cumulative — an unstamped project gets all of them, in order. Do the mechanical renames with exact-match edits; never regenerate a file from scratch, because that loses everything the format doesn't know about.
 
-```
-⚙ ristretto: this project is on format <old>, the plugin is <new>.
-  Migrating docs/ristretto/ before continuing — <n> plan(s), the roadmap, and .ristretto.json.
-  Records change shape only; no criterion, decision, or status meaning is altered.
-```
-
-If the working tree is dirty, say that the migration will be mixed in with their uncommitted work, and offer to stop so they can commit first. A migration is much easier to review as its own diff.
-
-## 3. Apply every step below the project's recorded format
-
-Each block is cumulative — a project on 0.11 gets all of them, in order. Do the mechanical renames with exact-match edits; never regenerate a file from scratch, because that loses everything the format doesn't know about.
-
-### → 0.14 — one human state, and classified criteria
+### → 0.13 — contracts, one human state, and classified criteria
 
 1. **Roadmap statuses:** `needs-ops` → `needs-human`. No other status changes.
 2. **`docs/ristretto/manual-ops.md` → `docs/ristretto/manual-checks.md`** (rename the file; keep its history by using `git mv` if the file is tracked). Inside it, and in the header text:
@@ -49,13 +36,13 @@ Each block is cumulative — a project on 0.11 gets all of them, in order. Do th
    - A `[human]` criterion with no matching line in `manual-checks.md` needs one. Add it with `?` for the "what to do" and flag it — you know a person must do something, not what.
 5. **`.ristretto.json`:** add `testChanged` and `formatPaths` if absent, exactly as `pull` step 3 describes. Never change a command the user already wrote.
 
-### → 0.13 — contracts, and a status for manual work
+**Also, for a project that predates `## Contract` entirely:**
 
-1. Plans with no `## Contract` section: move `Acceptance:` under a new `## Contract`, and add `Provides:`, `Consumes:`, `Decisions:`, `Units:`, `Manual-Checks:` as `—` where unknown. **Leave them `—`.** Filling them in is `prep`'s job with the user present — inventing a `Provides:` here would poison every dependent feature's planner, which reads it as fact.
-2. Move `Blockers:` from `## Approach` into `## Contract` if it's in the old place.
-3. Say in your summary which plans came out with empty Contract fields, and suggest `/ristretto:prep <ID> deep` for any that are still `planned` — a thin contract is the single largest cause of an inaccurate build.
+6. Plans with no `## Contract` section: move `Acceptance:` under a new `## Contract`, and add `Provides:`, `Consumes:`, `Decisions:`, `Units:`, `Manual-Checks:` as `—` where unknown. **Leave them `—`.** Filling them in is `prep`'s job with the user present — inventing a `Provides:` here would poison every dependent feature's planner, which reads it as fact.
+7. Move `Blockers:` from `## Approach` into `## Contract` if it's in the old place.
+8. Say in your summary which plans came out with empty Contract fields, and suggest `/ristretto:prep <ID> deep` for any that are still `planned` — a thin contract is the single largest cause of an inaccurate build.
 
-## 4. Stamp and report
+## 3. Stamp, report, and carry on
 
 ```
 node "${CLAUDE_PLUGIN_ROOT}/scripts/version.js" stamp
@@ -70,6 +57,8 @@ Then report, in this order:
 5. That the migration is uncommitted and worth reviewing as its own commit.
 
 Never commit the migration yourself unless the user asked you to — reviewing a rewrite of your own plans is exactly the thing that shouldn't be automatic.
+
+Then **continue with the command the user actually ran.** The migration is not the errand; it is the thing that had to be true first.
 
 ## Hard rules
 

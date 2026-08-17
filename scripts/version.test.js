@@ -41,7 +41,7 @@ dir = project('# Ristretto Roadmap\n\n| Flight | Feature |\n');
 r = run(dir, 'check');
 assert.strictEqual(r.status, 1, 'an unstamped roadmap must report a migration is needed');
 assert.ok(r.stdout.includes('UNSTAMPED'), 'the report must name the actual condition');
-assert.ok(r.stdout.includes('0.13 or earlier'), 'and say what that implies about its age');
+assert.ok(r.stdout.includes('0.12 or earlier'), 'and say what that implies about its age');
 
 // 3. Stamping is idempotent, keeps the title first, and satisfies a later check.
 r = run(dir, 'stamp');
@@ -61,10 +61,10 @@ assert.strictEqual(r.status, 1, 'an older format must report a migration is need
 assert.ok(r.stdout.includes('project 0.9'), 'the project version must be named');
 assert.ok(r.stdout.includes(CURRENT), 'the plugin version must be named');
 
-// 5. THE ONE THAT MATTERS FOR ORDERING. 0.9 is OLDER than 0.14 — a string compare says the
+// 5. THE ONE THAT MATTERS FOR ORDERING. 0.9 is OLDER than 0.13 — a string compare says the
 //    opposite, and would send a current project through a pointless "migration" that rewrites
 //    it into an older shape.
-assert.ok(r.stdout.includes('migration needed'), '0.9 must be treated as older than 0.14, not newer');
+assert.ok(r.stdout.includes('migration needed'), '0.9 must be treated as older than 0.13, not newer');
 
 // 6. A project NEWER than the plugin must refuse, not migrate. That is a stale install, and
 //    "migrating" it would mean discarding whatever the newer format records.
