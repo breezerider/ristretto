@@ -3,14 +3,32 @@
 // Node instead of bash+jq so it runs identically on Windows, macOS, Linux.
 //
 // Modes:
-//   quick   PostToolUse hook. Formats the touched file. ALWAYS exits 0 (convenience, not gate).
-//   full    Stop/SubagentStop hook. Runs lint + typecheck + test. Exits 2 on failure (blocks the
-//           agent), but ONLY while .ristretto/pulling exists. Outside a pull: exits 0 immediately.
-//           Uses gates.testChanged (scoped to the touched files) when configured — the loop stays
-//           fast; the full suite is proven once at the end via `verify`.
-//   verify  Not a hook — run directly (`node gate.js verify`). Runs lint + typecheck + the FULL
-//           test gate, ignoring both the marker and the green-tree cache. Prints a one-line
-//           summary. Exits 0 green, 1 red. This is brew's pre-flight and its end-of-run proof.
+//   quick            PostToolUse hook. Formats the touched file — only if it matches
+//                    gates.formatPaths, when that is configured. ALWAYS exits 0 (convenience).
+//   full             Stop hook. Runs lint + typecheck + test. Exits 2 on failure (blocks the
+//                    agent), but ONLY while .ristretto/pulling exists. Outside a pull: exits 0.
+//                    Uses gates.testChanged (scoped to the touched files) when configured — the
+//                    loop stays fast; the full suite is proven once at the end via `verify`.
+//   full subagent    SubagentStop hook. Same, but never exempt (see ORCHESTRATOR below).
+//   verify           Not a hook — run directly (`node gate.js verify`). Runs lint + typecheck +
+//                    the FULL test gate, ignoring the marker and the cache. One-line summary.
+//                    Exits 0 green, 1 red. brew's pre-flight and its end-of-run proof.
+//   verify cached    Same, but a tree byte-identical to one already proven green returns that
+//                    verdict instead of re-running. For a pre-flight repeated after a session
+//                    restart: re-paying a ten-minute suite to re-prove an unchanged tree is
+//                    waste, and waste at the worst moment — before anything has been built.
+//
+// ORCHESTRATOR. brew's main agent writes no source by design; it dispatches subagents, which are
+// gated individually on SubagentStop. Gating its OWN stops means running a suite against a tree a
+// live subagent is mid-edit on — a half-applied migration reads as hundreds of red tests that
+// belong to nobody. So while .ristretto/orchestrating exists, Stop is exempt and SubagentStop is
+// not. pull and shot never write that marker: there the main agent IS the implementer.
+//
+// LOCK. Exactly one gate run at a time, repo-wide (.ristretto/gate-lock). Two concurrent suites
+// sharing one database or port produce failures that belong to neither — a red that is pure
+// artifact, and indistinguishable from a real one without knowing what else was running. A run
+// that cannot get the lock reports UNVERIFIED and never blocks: a collision must not look like a
+// defect. Waiting is usually cheap, because the holder often proves the very tree we came to test.
 //
 // Hang detection is by SILENCE, not duration. A slow suite is still working and prints as it
 // goes; a hung one goes quiet. Killing on total runtime would murder a legitimately slow suite
@@ -25,7 +43,15 @@ const crypto = require('crypto');
 const { spawn, spawnSync, execSync } = require('child_process');
 
 const MODE = process.argv[2] || 'quick';
+const ARG = process.argv[3] || '';
 const MAX_RETRIES = 3;
+
+// Seconds a gate run will wait for the lock before giving up and reporting UNVERIFIED.
+const DEFAULT_LOCK_WAIT = 900;
+
+// A marker this old is left over from a session that died, not from a live pull. Honouring it
+// arms the gates on a session that never asked for them — the stale-marker trap.
+const MARKER_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 // Seconds a gate may produce NO output before it's treated as hung.
 // lint and typecheck get a long rope on purpose: tools like `tsc --noEmit` and `eslint .` print
@@ -47,6 +73,8 @@ const retriesPath = path.join(projectDir, '.ristretto', 'gate-retries');
 const greenPath = path.join(projectDir, '.ristretto', 'gate-green');
 const stalledPath = path.join(projectDir, '.ristretto', 'gate-stalled');
 const toolsPath = path.join(projectDir, '.ristretto', 'gate-tools.json');
+const lockPath = path.join(projectDir, '.ristretto', 'gate-lock');
+const orchestratingPath = path.join(projectDir, '.ristretto', 'orchestrating');
 
 // No config → ristretto not set up in this repo → never interfere.
 if (!fs.existsSync(configPath)) process.exit(0);
@@ -56,14 +84,21 @@ if (MODE !== 'verify') {
   try { hook = JSON.parse(fs.readFileSync(0, 'utf8')); } catch { /* no/bad stdin is fine */ }
 }
 
+// Which stop is this? The hooks.json argument is authoritative; the event name from the hook
+// payload is a fallback for a hooks.json that predates the argument.
+const IS_SUBAGENT = ARG === 'subagent' || hook.hook_event_name === 'SubagentStop';
+const CACHED = ARG === 'cached';
+
 let gates = {};
 let silence = DEFAULT_SILENCE;
 let hardCaps = DEFAULT_HARD_CAP;
+let lockWait = DEFAULT_LOCK_WAIT;
 try {
   const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   gates = config.gates || {};
   silence = { ...DEFAULT_SILENCE, ...(config.silence || {}) };
   hardCaps = { ...DEFAULT_HARD_CAP, ...(config.timeouts || {}) };
+  if (Number.isFinite(config.lockWait)) lockWait = config.lockWait;
 } catch (e) {
   if (MODE === 'verify') {
     console.error(`ristretto: .ristretto.json is unparseable (${e.message}) — fix it, the gate cannot run.`);
@@ -75,6 +110,109 @@ try {
     process.exit(2);
   }
   process.exit(0);
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Is that pid still around? EPERM means it exists but belongs to someone else — still alive.
+function alive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
+
+// --- The gate lock: one gate run at a time, repo-wide. ---
+// Not an optimisation. Two `pytest -n auto` runs against one shared database produce a stable,
+// convincing, entirely fictional set of failures; the same is true of any suite that binds a
+// port or a fixture. Serialising is the only way a red gate can be trusted to mean something.
+
+let holdsLock = false;
+
+// true if the lock is ours, false if we waited out `waitSec` without getting it.
+async function acquireLock(label) {
+  const deadline = Date.now() + lockWait * 1000;
+  for (;;) {
+    try {
+      fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+      // 'wx' fails if the file exists — the atomic create that makes this a lock at all.
+      const fd = fs.openSync(lockPath, 'wx');
+      fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, label, at: Date.now() }));
+      fs.closeSync(fd);
+      holdsLock = true;
+      return true;
+    } catch (e) {
+      // Can't create it for a reason other than "taken" (read-only checkout, odd permissions):
+      // proceed unlocked rather than refuse to gate at all. Enforcement beats serialisation.
+      if (e.code !== 'EEXIST') return true;
+      let held = null;
+      try { held = JSON.parse(fs.readFileSync(lockPath, 'utf8')); } catch { /* torn or empty */ }
+      if (!held || !alive(held.pid)) {
+        try { fs.unlinkSync(lockPath); } catch { /* someone else cleaned up first */ }
+        continue; // the holder died — steal it
+      }
+      if (Date.now() >= deadline) return false;
+      await sleep(POLL_MS);
+    }
+  }
+}
+
+function releaseLock() {
+  if (!holdsLock) return;
+  try {
+    const held = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    if (held.pid === process.pid) fs.unlinkSync(lockPath);
+  } catch { /* already gone, or not ours to remove */ }
+  holdsLock = false;
+}
+process.on('exit', releaseLock);
+
+function lockHolder() {
+  try {
+    const held = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    return `${held.label || 'a gate run'} (pid ${held.pid}, started ${Math.round((Date.now() - held.at) / 1000)}s ago)`;
+  } catch {
+    return 'another gate run';
+  }
+}
+
+// --- Which files may the format convenience touch? ---
+// Unconfigured, it formats whatever was written — which is how a repo-wide formatter ends up
+// reflowing a doc nobody asked it to, and how a two-line edit becomes a hundred-line diff that
+// the next edit re-triggers. gates.formatPaths scopes it to the paths the formatter owns.
+
+function expandBraces(glob) {
+  const m = /\{([^{}]*)\}/.exec(glob);
+  if (!m) return [glob];
+  return m[1].split(',').flatMap((opt) =>
+    expandBraces(glob.slice(0, m.index) + opt + glob.slice(m.index + m[0].length)));
+}
+
+function globToRegExp(glob) {
+  let re = '';
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === '*') {
+      if (glob[i + 1] === '*') {
+        re += '.*';
+        i++;
+        if (glob[i + 1] === '/') i++; // `**/` also matches zero directories
+      } else {
+        re += '[^/]*';
+      }
+    } else if (c === '?') {
+      re += '[^/]';
+    } else {
+      re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+    }
+  }
+  return new RegExp(`^${re}$`);
+}
+
+function formatAllowed(file) {
+  const patterns = gates.formatPaths;
+  if (!Array.isArray(patterns) || !patterns.length) return true; // unconfigured → format anything
+  const rel = path.relative(projectDir, file).split(path.sep).join('/');
+  if (!rel || rel.startsWith('..')) return false; // outside the repo — never ours to rewrite
+  return patterns.some((p) => expandBraces(p).some((g) => globToRegExp(g).test(rel)));
 }
 
 // Kill the whole process group. A test runner forks workers; killing only the shell leaves them
@@ -287,7 +425,7 @@ function hangAdvice(gate, result) {
 async function main() {
   if (MODE === 'quick') {
     const file = hook.tool_input && hook.tool_input.file_path;
-    if (gates.format && file && fs.existsSync(file)) {
+    if (gates.format && file && fs.existsSync(file) && formatAllowed(file)) {
       // convenience only — never block, stay quiet
       await run(gates.format.replace('{file}', `"${file}"`), budget({ key: 'format' }));
     }
@@ -295,7 +433,31 @@ async function main() {
   }
 
   if (MODE === 'verify') {
+    // A pre-flight repeated on an unchanged tree proves nothing the first one didn't. `cached`
+    // is how brew asks for that verdict instead of re-paying for it after a session restart.
+    if (CACHED) {
+      const fp = treeFingerprint();
+      let lastGreen = null;
+      try { lastGreen = fs.readFileSync(greenPath, 'utf8'); } catch { /* nothing proven yet */ }
+      if (fp !== null && fp === lastGreen) {
+        const drift = toolDrift(resolveGateTools());
+        if (drift.length) {
+          // The cached green was proved with a different toolchain than this run would use, so
+          // it says nothing about this one. Fall through and prove it properly.
+          console.error(drift.join('\n'));
+        } else {
+          console.log('gates: cached green — tree byte-identical to the last proven run, nothing re-run');
+          process.exit(0);
+        }
+      }
+    }
+
     // Full scope, no cache, no marker required. Green here is the real proof.
+    if (!(await acquireLock('verify'))) {
+      console.error(`ristretto: could not start — ${lockHolder()} still holds the gate lock after ${lockWait}s.`);
+      console.error('  The tree is UNVERIFIED, not red. Let that run finish, then verify again.');
+      process.exit(1);
+    }
     const results = [];
     let failures = '';
     let hung = false;
@@ -341,11 +503,39 @@ async function main() {
   if (MODE === 'full') {
     if (!fs.existsSync(markerPath)) process.exit(0); // only gate while a pull is active
 
+    // A marker nobody disarmed keeps gating sessions that are not pulls. Age it out rather than
+    // silently arming a session that never asked — and say so, so it gets cleaned up.
+    let markerAge = null;
+    try { markerAge = Date.now() - fs.statSync(markerPath).mtimeMs; } catch { /* keep gating */ }
+    if (markerAge !== null && markerAge > MARKER_MAX_AGE_MS) {
+      console.error(`ristretto: .ristretto/pulling is ${Math.round(markerAge / 3600000)}h old — treating it as a leftover from a dead session and NOT gating.`);
+      console.error('  If a pull really is in progress, touch the marker; otherwise delete it.');
+      process.exit(0);
+    }
+
+    // brew's orchestrator writes no source and its subagents are gated one by one. Running a
+    // suite here measures a tree that a live subagent is mid-edit on — the red belongs to a
+    // half-finished cycle, not to anyone's work, and it burns the retry budget to say so.
+    if (!IS_SUBAGENT && fs.existsSync(orchestratingPath)) process.exit(0);
+
     // Tree unchanged since the last green run → already proven, skip.
     const fp = treeFingerprint();
     let lastGreen = null;
     try { lastGreen = fs.readFileSync(greenPath, 'utf8'); } catch { /* no green run yet */ }
     if (fp !== null && fp === lastGreen) process.exit(0);
+
+    // Serialise. A gate that runs alongside another one measures both.
+    if (!(await acquireLock(IS_SUBAGENT ? 'subagent stop' : 'stop'))) {
+      console.error(`ristretto: gates did not run — ${lockHolder()} still holds the gate lock after ${lockWait}s.`);
+      console.error('  This stop is UNVERIFIED, not green. Two suites at once invent failures that belong to neither,');
+      console.error('  so ristretto waits rather than reporting a red it cannot trust. Re-run the gates once that finishes.');
+      process.exit(0);
+    }
+
+    // The holder may have proven exactly the tree we came to test while we waited.
+    const afterWait = treeFingerprint();
+    try { lastGreen = fs.readFileSync(greenPath, 'utf8'); } catch { /* still nothing */ }
+    if (afterWait !== null && afterWait === lastGreen) process.exit(0);
 
     // Did the pre-flight prove a green tree with a different toolchain than this hook runs?
     const drift = toolDrift(resolveGateTools());

@@ -18,8 +18,8 @@ const SLOW = `node -e "let n=0; const t=setInterval(()=>{console.log('tick'+(++n
 // Prints once, then goes quiet forever — the shape of a real hang (suite starts, then wedges).
 const STALL = `node -e "console.log('starting'); setTimeout(()=>{}, 60000)"`;
 
-function gate(dir, mode, stdin = '{}', env = {}) {
-  return spawnSync(process.execPath, [GATE, mode], {
+function gate(dir, mode, stdin = '{}', env = {}, arg) {
+  return spawnSync(process.execPath, arg ? [GATE, mode, arg] : [GATE, mode], {
     input: stdin,
     encoding: 'utf8',
     env: { ...process.env, CLAUDE_PROJECT_DIR: dir, ...env },
@@ -283,5 +283,127 @@ if (process.platform !== 'win32') {
   assert.strictEqual(r.status, 0, 'the verified toolchain must pass');
   assert.ok(!r.stderr.includes('is not the one that was verified'), 'no drift warning when nothing drifted');
 }
+
+// --- The orchestrator exemption. ---
+// brew's main agent writes no source; gating its stops runs a suite against a tree a live
+// subagent is mid-edit on, and reports a red that belongs to a half-finished TDD cycle.
+
+// 28. While orchestrating, a Stop is exempt but a SubagentStop is still fully gated.
+dir = tmpRepo(JSON.stringify({ gates: { lint: FAIL } }));
+arm(dir);
+fs.writeFileSync(path.join(dir, '.ristretto', 'orchestrating'), '');
+assert.strictEqual(gate(dir, 'full').status, 0, 'an orchestrator Stop must not be gated');
+r = gate(dir, 'full', '{}', {}, 'subagent');
+assert.strictEqual(r.status, 2, 'a SubagentStop must be gated even while orchestrating');
+assert.ok(r.stderr.includes("gate 'lint' FAILED"), 'the subagent gate must still name the failure');
+
+// 29. The exemption is opt-in per run: without the marker, Stop gates exactly as before. pull
+//     and shot never write it, because there the main agent IS the implementer.
+fs.rmSync(path.join(dir, '.ristretto', 'orchestrating'));
+fs.rmSync(path.join(dir, '.ristretto', 'gate-retries'), { force: true });
+assert.strictEqual(gate(dir, 'full').status, 2, 'without the marker a red Stop must block as usual');
+
+// 30. The event name from the hook payload identifies a SubagentStop too, so a hooks.json that
+//     predates the argument still gates subagents rather than silently exempting them.
+fs.writeFileSync(path.join(dir, '.ristretto', 'orchestrating'), '');
+fs.rmSync(path.join(dir, '.ristretto', 'gate-retries'), { force: true });
+r = gate(dir, 'full', JSON.stringify({ hook_event_name: 'SubagentStop' }));
+assert.strictEqual(r.status, 2, 'the payload event name must be enough to identify a subagent stop');
+
+// --- The gate lock: one run at a time, repo-wide. ---
+
+// 31. A held lock is waited on, not run through — and the wait ends in UNVERIFIED, never red.
+dir = tmpRepo(JSON.stringify({ gates: { test: COUNT }, lockWait: 1 }));
+arm(dir);
+fs.mkdirSync(path.join(dir, '.ristretto'), { recursive: true });
+fs.writeFileSync(path.join(dir, '.ristretto', 'gate-lock'),
+  JSON.stringify({ pid: process.pid, label: 'a full suite', at: Date.now() })); // ours = alive
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 0, 'a lock conflict must never block the agent');
+assert.strictEqual(runs(dir), 0, 'the gates must NOT run while another run holds the lock');
+assert.ok(r.stderr.includes('UNVERIFIED'), 'a lock conflict must be reported as unverified, not green');
+assert.ok(r.stderr.includes('a full suite'), 'the report must name who is holding the lock');
+
+// 32. A lock left by a dead process is stolen, not obeyed forever.
+fs.writeFileSync(path.join(dir, '.ristretto', 'gate-lock'),
+  JSON.stringify({ pid: 0x7ffffffe, label: 'a crashed run', at: Date.now() }));
+assert.strictEqual(gate(dir, 'full').status, 0, 'a stale lock must not wedge the gates');
+assert.strictEqual(runs(dir), 1, 'a stale lock must be stolen and the gates run');
+
+// 33. The lock is released on exit, so back-to-back runs are not blocked by the previous one.
+fs.writeFileSync(path.join(dir, 'x.txt'), 'change'); // bust the green cache
+assert.strictEqual(gate(dir, 'full').status, 0);
+assert.strictEqual(runs(dir), 2, 'the lock must be released when a run finishes');
+assert.ok(!fs.existsSync(path.join(dir, '.ristretto', 'gate-lock')), 'no lock file may survive a finished run');
+
+// 34. verify refuses to claim green it could not prove — a lock conflict is exit 1, not 0.
+dir = tmpRepo(JSON.stringify({ gates: { test: PASS }, lockWait: 1 }));
+fs.mkdirSync(path.join(dir, '.ristretto'), { recursive: true });
+fs.writeFileSync(path.join(dir, '.ristretto', 'gate-lock'),
+  JSON.stringify({ pid: process.pid, label: 'a full suite', at: Date.now() }));
+r = gate(dir, 'verify');
+assert.strictEqual(r.status, 1, 'verify must not report success it never established');
+assert.ok(r.stderr.includes('UNVERIFIED'), 'verify must say the tree is unverified, not red');
+
+// --- verify cached: do not re-pay for an unchanged tree. ---
+
+// 35. A plain verify always re-runs; `verify cached` returns the stored verdict for the same tree.
+dir = gitTmpRepo(JSON.stringify({ gates: { test: COUNT } }));
+assert.strictEqual(gate(dir, 'verify').status, 0, 'the first verify must run and pass');
+assert.strictEqual(runs(dir), 1, 'the first verify must actually execute the suite');
+r = gate(dir, 'verify', '{}', {}, 'cached');
+assert.strictEqual(r.status, 0, 'a cached green tree must verify green');
+assert.strictEqual(runs(dir), 1, 'an unchanged tree must NOT re-run the suite in cached mode');
+assert.ok(r.stdout.includes('cached green'), 'a cached verdict must say it was cached');
+
+// 36. Any change to the tree makes the cache miss — the pre-flight is real again.
+fs.writeFileSync(path.join(dir, 'src.txt'), 'moved on');
+assert.strictEqual(gate(dir, 'verify', '{}', {}, 'cached').status, 0);
+assert.strictEqual(runs(dir), 2, 'a changed tree must re-run even in cached mode');
+
+// --- Format scoping: the convenience formatter stays where it belongs. ---
+const MARK = `node -e "require('fs').appendFileSync(process.argv[1] + '.formatted', 'x')" {file}`;
+const formatted = (f) => fs.existsSync(f + '.formatted');
+
+// 37. With formatPaths set, a file inside the patterns is formatted and one outside is left alone.
+dir = tmpRepo(JSON.stringify({ gates: { format: MARK, formatPaths: ['src/**/*.{ts,tsx}'] } }));
+fs.mkdirSync(path.join(dir, 'src', 'deep'), { recursive: true });
+const code = path.join(dir, 'src', 'deep', 'a.ts');
+const doc = path.join(dir, 'DEPLOY.md');
+fs.writeFileSync(code, 'x');
+fs.writeFileSync(doc, '# heading');
+assert.strictEqual(gate(dir, 'quick', JSON.stringify({ tool_input: { file_path: code } })).status, 0);
+assert.ok(formatted(code), 'a file matching formatPaths must still be formatted');
+assert.strictEqual(gate(dir, 'quick', JSON.stringify({ tool_input: { file_path: doc } })).status, 0);
+assert.ok(!formatted(doc), 'a file outside formatPaths must be left completely alone');
+
+// 38. `**/` matches zero directories too, so `src/**/*.ts` covers `src/a.ts`.
+const shallow = path.join(dir, 'src', 'b.ts');
+fs.writeFileSync(shallow, 'x');
+gate(dir, 'quick', JSON.stringify({ tool_input: { file_path: shallow } }));
+assert.ok(formatted(shallow), '**/ must match zero directories as well as many');
+
+// 39. Unconfigured formatPaths keeps today's behavior — everything is formatted.
+dir = tmpRepo(JSON.stringify({ gates: { format: MARK } }));
+const anything = path.join(dir, 'README.md');
+fs.writeFileSync(anything, 'x');
+gate(dir, 'quick', JSON.stringify({ tool_input: { file_path: anything } }));
+assert.ok(formatted(anything), 'without formatPaths the formatter must behave exactly as before');
+
+// --- Stale marker: a dead session must not arm a live one. ---
+
+// 40. A marker older than a day is a leftover, not a pull. It is reported and ignored.
+dir = tmpRepo(JSON.stringify({ gates: { lint: FAIL } }));
+arm(dir);
+const old = Date.now() / 1000 - 48 * 3600;
+fs.utimesSync(path.join(dir, '.ristretto', 'pulling'), old, old);
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 0, 'a stale marker must not gate a session that never asked');
+assert.ok(r.stderr.includes('48h old'), 'the staleness must be reported with its age');
+assert.ok(r.stderr.includes('delete it'), 'the report must say how to clear it');
+
+// 41. A fresh marker gates exactly as before — the age-out must not weaken a live pull.
+arm(dir);
+assert.strictEqual(gate(dir, 'full').status, 2, 'a fresh marker must still gate');
 
 console.log('gate.test.js: all checks passed');

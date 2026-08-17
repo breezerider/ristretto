@@ -29,7 +29,7 @@ This is the whole point of the command. Don't rubber-stamp. Call out vague accep
 - *Ready*: clear goal, at least 2–3 meaningful ACs, no blocking unknowns, dependencies identified, fits one sprint (≤ 13).
 - *Not Ready*: list the questions to ask in refinement and what has to change to reach Ready. **Name the specific `Contract` fields that can't be filled yet** — `Acceptance` (no checkable criterion), `Provides` (the public surface isn't decided), `Decisions` (an open ruling) — so the output drops straight into `/ristretto:prep <feature> deep` as an agenda.
 
-Call out **manual ops** in *Problems & risks* wherever the feature implies one: a schema change, a migration, a secret or env var, a switch in a third-party console. These don't make a feature Not Ready — they belong in `Contract.Manual-Ops` and get built around — but a refinement session is the cheapest place to notice that someone will need database access on the day it ships.
+Call out **manual checks** in *Problems & risks* wherever the feature implies one: a schema change, a migration, a secret or env var, a switch in a third-party console. These don't make a feature Not Ready — they belong in `Contract.Manual-Checks` and get built around — but a refinement session is the cheapest place to notice that someone will need database access on the day it ships.
 
 Acknowledge what was given versus what you inferred, and flag any inferred acceptance criteria as inferred.
 

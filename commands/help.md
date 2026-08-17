@@ -14,9 +14,9 @@ THE WORKFLOW
   2. /ristretto:prep <features>     batch-plan into a durable ## Contract
      …or /ristretto:prep <f> deep   (checkable criteria, Provides/Consumes,
                                     decisions, units) + a one-screen ## Approach.
-                                    fast by default; escalates into grill mode
+                                    fast by default; escalates into roast mode
                                     when a criterion can't be made checkable.
-                                    "deep" forces the grill.
+                                    "deep" forces the roast.
   3. /ristretto:brew                brew the whole pot: implements every
                                     eligible feature unattended, one gated
                                     commit each, on feature/brew-<date>.
@@ -32,22 +32,28 @@ THE WORKFLOW
   4. /ristretto:status blocked      your refinement queue after a brew —
                                     each row names its spec gap. refine via
                                     prep (flips it back to planned), re-brew.
-     /ristretto:status ops          your do-it-yourself queue — the SQL, migrations
+     /ristretto:status checks          your do-it-yourself queue — the SQL, migrations
                                     and secrets ristretto can't run. tick the box
-                                    in docs/ristretto/manual-ops.md, re-brew.
+                                    in docs/ristretto/manual-checks.md, re-brew.
 
 THE REST OF THE MENU
   /ristretto:shot <feature>         prep + pull one trivial feature in one pass.
                                     same spec standard — no checkable criteria
                                     or no Provides: on the spot → routes to prep.
   /ristretto:status [filter]        roadmap view: gauge + rows.
-                                    filters: open | done | blocked | ops | ID | flight
+                                    filters: open | done | blocked | checks | ID | flight
   /ristretto:tamp [target] [fix]    lean-code review of a diff/file: waste,
                                     duplication, over-build. "fix" applies.
   /ristretto:help                   this menu.
 
 HOUSE RULES
   • specs first — nothing is built that isn't planned with checkable criteria.
+  • planned means DECIDED — brew never stops to ask. every ruling is made in
+    prep (roast mode roasts them out), so a question at 3am is a prep bug.
+    brew goes as far as it possibly can, every time.
+  • your house rules bind — CLAUDE.md / AGENTS.md is read when planning and
+    implementing, and a rule the diff violates is a "bug" finding in review.
+    ristretto reads it; it never writes to it.
   • the plan splits in two — the ## Contract is durable and deep; the
     directions are generated against HEAD at pull time into
     .ristretto/build/<ID>.md and deleted at close. neither can rot.
@@ -58,14 +64,20 @@ HOUSE RULES
     enforced, not self-reported. evidence is recorded, not claimed.
     a gate that stops PRINTING is hung and gets killed; a slow one that keeps
     printing is left to finish. hangs are surfaced, never retried.
+    one gate run at a time, repo-wide — two suites sharing a database invent
+    failures that belong to neither. brew's orchestrator isn't gated on its
+    own stops; its subagents are, one at a time.
   • fast loop, honest end — the loop tests only what the feature touched
     (gates.testChanged); the full suite runs once at the end and its verdict
     goes in the report. red there is loud, never quiet.
-  • blocked ≠ needs-ops — a missing DECISION blocks (go refine it). something a
-    human must RUN — SQL, a migration, a secret — becomes a line in
-    docs/ristretto/manual-ops.md and a "needs-ops" close: the code is still
+  • every criterion is [auto] or [human] — never unclassified. anything a
+    test can't prove (a migration to run, a screen to look at) is [human]:
+    it stays in the contract, becomes a line in docs/ristretto/manual-checks.md,
+    and the feature still gets built, gated, reviewed and committed.
+  • blocked ≠ needs-human — a missing DECISION blocks (go refine it). something a
+    human must RUN OR LOOK AT becomes a "needs-human" close: the code is still
     built and committed, and dependent features still brew. nothing stalls
-    a flight behind one alter table.
+    a flight behind one alter table or one UI check.
   • independent review — before any commit, a fresh subagent that never saw
     the implementation judges the diff (bugs first, then lean). bugs must be
     fixed; 2 rounds (brew gets a 3rd on a stronger model), then it surfaces
