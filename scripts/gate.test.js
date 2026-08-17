@@ -17,6 +17,10 @@ const HANG = `node -e "setTimeout(()=>{}, 60000)"`;
 const SLOW = `node -e "let n=0; const t=setInterval(()=>{console.log('tick'+(++n)); if(n>11){clearInterval(t); process.exit(0);}}, 250)"`;
 // Prints once, then goes quiet forever — the shape of a real hang (suite starts, then wedges).
 const STALL = `node -e "console.log('starting'); setTimeout(()=>{}, 60000)"`;
+// Talks for ~8s. Used only where a killed run must be distinguishable from an unkilled one by
+// wall-clock: the gap has to be wide enough that a loaded machine can't blur the two. A tight
+// bound against a 3s command is exactly the kind of red that means "the box was busy".
+const VERY_SLOW = `node -e "let n=0; const t=setInterval(()=>{console.log('tick'+(++n)); if(n>31){clearInterval(t); process.exit(0);}}, 250)"`;
 
 function gate(dir, mode, stdin = '{}', env = {}, arg) {
   return spawnSync(process.execPath, arg ? [GATE, mode, arg] : [GATE, mode], {
@@ -173,11 +177,12 @@ arm(dir);
 assert.strictEqual(gate(dir, 'full').status, 0, 'with no timeouts configured, nothing caps a working gate');
 
 // 17. A hard cap is opt-in and still works when asked for — it kills a talking gate too.
-dir = tmpRepo(JSON.stringify({ gates: { test: SLOW }, timeouts: { test: 1 } }));
+dir = tmpRepo(JSON.stringify({ gates: { test: VERY_SLOW }, timeouts: { test: 1 } }));
 arm(dir);
 startedAt = Date.now();
 r = gate(dir, 'full');
-assert.ok(Date.now() - startedAt < 3000, 'an explicit hard cap must cut a long gate short');
+const cappedAfter = Date.now() - startedAt;
+assert.ok(cappedAfter < 5000, `an explicit hard cap must cut a long gate short (ran ${cappedAfter}ms of a ~8s command)`);
 assert.strictEqual(r.status, 0, 'a hard-capped gate must surface, not block');
 assert.ok(r.stderr.includes('hard cap of 1s'), 'a hard-cap kill must be named as such, not as a stall');
 
@@ -437,5 +442,95 @@ fs.utimesSync(marker, halfWay, halfWay);
 assert.strictEqual(gate(dir, 'full').status, 0, 'a marker within the window must still gate');
 const idleAfter = Date.now() - fs.statSync(marker).mtimeMs;
 assert.ok(idleAfter < 60000, `a gate run must reset the marker's idle clock (was ${Math.round(idleAfter / 1000)}s)`);
+
+// --- Routed testChanged: a polyglot repo needs more than one runner. ---
+// A single command string gets EVERY changed path substituted into it, so on a backend+frontend
+// repo `pytest {files}` would be handed .tsx files. Routed, each runner sees only its own — and
+// a runner with nothing to do never starts, which is where the wall-clock actually goes.
+const BE = `node -e "require('fs').appendFileSync('args', 'BE:' + process.argv.slice(1).join(',') + '\\n')" {files}`;
+const FE = `node -e "require('fs').appendFileSync('args', 'FE:' + process.argv.slice(1).join(',') + '\\n')" {files}`;
+const ran = (d) => { try { return fs.readFileSync(path.join(d, 'args'), 'utf8'); } catch { return ''; } };
+
+const routed = (extra = []) => JSON.stringify({
+  gates: {
+    test: FULL,
+    testChanged: [
+      { match: ['backend/**/*.py'], cmd: BE, name: 'backend' },
+      { match: ['frontend/**/*.{ts,tsx}'], cmd: FE, name: 'frontend' },
+      ...extra,
+    ],
+  },
+});
+
+function polyRepo(config) {
+  const d = gitTmpRepo(config);
+  fs.mkdirSync(path.join(d, 'backend'), { recursive: true });
+  fs.mkdirSync(path.join(d, 'frontend'), { recursive: true });
+  return d;
+}
+
+// 45. Each route receives ONLY its own files — never the other stack's.
+dir = polyRepo(routed());
+arm(dir);
+fs.writeFileSync(path.join(dir, 'backend', 'api.py'), 'x');
+fs.writeFileSync(path.join(dir, 'frontend', 'ui.tsx'), 'x');
+assert.strictEqual(gate(dir, 'full').status, 0, 'a routed run must exit 0 when green');
+let out = ran(dir);
+assert.ok(/BE:[^\n]*backend\/api\.py/.test(out), 'the backend route must receive its .py file');
+assert.ok(!/BE:[^\n]*\.tsx/.test(out), 'the backend route must NEVER receive a .tsx file');
+assert.ok(/FE:[^\n]*frontend\/ui\.tsx/.test(out), 'the frontend route must receive its .tsx file');
+assert.ok(!/FE:[^\n]*\.py/.test(out), 'the frontend route must never receive a .py file');
+assert.strictEqual(trace(dir), '', 'a fully routed change must never fall back to the full suite');
+
+// 46. THE ONE THAT SAVES THE TIME. A change touching only one stack must not start the other's
+//     suite at all — that is the whole difference between an 11-minute stop and a 20-second one.
+dir = polyRepo(routed());
+arm(dir);
+fs.writeFileSync(path.join(dir, 'frontend', 'only.tsx'), 'x');
+assert.strictEqual(gate(dir, 'full').status, 0);
+out = ran(dir);
+assert.ok(out.includes('FE:'), 'the touched stack must be tested');
+assert.ok(!out.includes('BE:'), 'the untouched stack must NOT run at all');
+
+// 47. Fail-safe: a changed file matching no route runs the FULL suite rather than a partial
+//     one. An unrecognised path may be exactly the one that breaks everything, and a green
+//     that quietly skipped it would be a lie.
+dir = polyRepo(routed());
+arm(dir);
+fs.writeFileSync(path.join(dir, 'backend', 'api.py'), 'x');
+fs.writeFileSync(path.join(dir, 'infra.tf'), 'resource {}'); // routed nowhere
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 0);
+assert.strictEqual(trace(dir), 'f', 'an unrouted file must force the full suite');
+assert.strictEqual(ran(dir), '', 'no partial route may run when the full suite was chosen');
+assert.ok(r.stderr.includes('match no "testChanged" route'), 'the fallback must say why it happened');
+assert.ok(r.stderr.includes('infra.tf'), 'the fallback must name the unrouted file');
+
+// 48. An empty cmd claims files deliberately — the explicit "these need no tests" route.
+dir = polyRepo(routed([{ match: ['**/*.md', '*.tf'], cmd: '' }]));
+arm(dir);
+fs.writeFileSync(path.join(dir, 'README.md'), '# docs');
+fs.writeFileSync(path.join(dir, 'infra.tf'), 'resource {}');
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 0);
+assert.strictEqual(trace(dir), '', 'a claimed-but-untested change must not trigger the full suite');
+assert.strictEqual(ran(dir), '', 'an empty cmd must run nothing');
+assert.ok(!r.stderr.includes('match no'), 'an explicitly claimed file is not unrouted');
+
+// 49. A failing route still blocks, and names which route failed.
+dir = polyRepo(JSON.stringify({ gates: { test: PASS, testChanged: [{ match: ['backend/**'], cmd: FAIL, name: 'backend' }] } }));
+arm(dir);
+fs.writeFileSync(path.join(dir, 'backend', 'api.py'), 'x');
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 2, 'a failing route must block like any other red gate');
+assert.ok(r.stderr.includes("gate 'test (changed: backend)' FAILED"), 'the failing route must be named');
+
+// 50. verify ignores routing entirely — its job is to prove the whole repo.
+dir = polyRepo(routed());
+fs.writeFileSync(path.join(dir, 'frontend', 'only.tsx'), 'x');
+r = gate(dir, 'verify');
+assert.strictEqual(r.status, 0);
+assert.strictEqual(trace(dir), 'f', 'verify must run the FULL suite regardless of routes');
+assert.strictEqual(ran(dir), '', 'verify must never run a scoped route');
 
 console.log('gate.test.js: all checks passed');

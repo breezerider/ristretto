@@ -69,6 +69,8 @@ On a repo whose suite takes ten minutes, gating every subagent stop on the full 
 
 That trade is explicit: scoped runs can't see cross-feature breakage, so the end-of-batch run is where it shows up. When it goes red, `brew` reports it loudly and first — and does **not** amend or revert the commits. Nothing was pushed, the branch is yours to review, and a fast batch with one honest red beats a batch too slow to finish. What isn't acceptable is a quiet one.
 
+On a repo with more than one stack, `testChanged` takes a **list of routes** rather than one command — `backend/**/*.py` to pytest, `frontend/**/*.{ts,tsx}` to vitest, `docs/**` to nothing. Each route sees only its own files and a route with nothing to do never starts, so a frontend-only feature doesn't pay for the backend suite. Anything matching no route falls back to the full suite and says so, because an unrecognised path might be the one that breaks everything.
+
 If `testChanged` is empty, the loop just runs the full suite as before — nothing changes for repos where that's already fast, and that's the right setting until a suite is slow enough to hurt.
 
 ## Manual checks: criteria no agent can prove

@@ -91,6 +91,20 @@ The plugin ships deterministic gate hooks: while a pull is active, a Stop hook r
 
    **Leave it empty whenever the runner can't scope honestly.** A `testChanged` that maps paths to the wrong tests is worse than no scoping at all: it reports green while proving nothing, and the loop is built on trusting that green. Maven, and any runner that selects by fully-qualified class name rather than file path, are exactly this case — an empty `testChanged` just falls back to the full `test` gate, which is always correct and sometimes slow. Slow is recoverable; a dishonest green is not.
 
+   **On a repo with more than one stack, `testChanged` must be a list of routes, not one string.** A single command gets *every* changed path substituted into it, so a backend+frontend repo would hand `.tsx` files to pytest. Route them instead — each entry sees only its own files, and an entry with nothing to do never runs at all:
+
+   ```json
+   "testChanged": [
+     { "name": "backend",  "match": ["backend/**/*.py"],           "cmd": "python -m pytest {files}" },
+     { "name": "frontend", "match": ["frontend/**/*.{ts,tsx}"],    "cmd": "npx vitest related --run {files}" },
+     { "name": "docs",     "match": ["docs/**", "**/*.md"],        "cmd": "" }
+   ]
+   ```
+
+   That last entry is the point of `cmd: ""` — it claims files and runs nothing, the explicit way to say "changes here need no tests". **Anything matching no route at all falls back to the full suite**, and says so: an unrecognised path might be the one that breaks everything, and a green that quietly skipped it would be a lie. So the routes are worth completing — but an incomplete one is never unsafe, only slow.
+
+   This is where the wall-clock actually goes on a big project. A frontend-only feature that never starts the backend suite turns a multi-minute gate at every subagent stop into a few seconds.
+
    **Prefer the `{files}` forms over a runner's own change detection.** `vitest --changed`, `jest -o` and friends read git's diff, which does not include untracked files — and a brand-new test file is exactly what red-first produces, so the tests that prove this feature would be the ones skipped. Leave `testChanged` as `""` when the suite is already quick; the loop then runs the full gate as it always did.
 
    Three optional keys tune the runner, all in seconds:

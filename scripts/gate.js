@@ -349,22 +349,82 @@ function treeFingerprint() {
   return h.digest('hex');
 }
 
-// The test gate to run at this point in the lifecycle.
-// scoped → prefer gates.testChanged, which tests only what this feature touched. A command
-// containing {files} gets the touched file list substituted; one that doesn't (`vitest run
-// --changed`, `jest -o`) is run as-is and works out the scope itself.
-// Returns null when there is nothing to run — no command, or {files} with an untouched tree.
-function testGate(scoped) {
-  const useChanged = scoped && gates.testChanged;
-  const cmd = useChanged ? gates.testChanged : gates.test;
-  if (!cmd) return null;
-  const key = useChanged ? 'testChanged' : 'test';
-  if (!cmd.includes('{files}')) return { key, label: useChanged ? 'test (changed)' : 'test', cmd };
-  const files = (dirtyPaths() || []).filter((p) => {
+// Every changed file that still exists on disk, repo-relative.
+function changedFiles() {
+  return (dirtyPaths() || []).filter((p) => {
     try { return fs.statSync(path.join(projectDir, p)).isFile(); } catch { return false; }
   });
-  if (!files.length) return null; // nothing touched → nothing to scope a run to
-  return { key, label: 'test (changed)', cmd: cmd.replace('{files}', files.map((f) => `"${f}"`).join(' ')) };
+}
+
+const quote = (files) => files.map((f) => `"${f}"`).join(' ');
+const matchesAny = (file, globs) =>
+  Array.isArray(globs) && globs.some((g) => expandBraces(g).some((x) => globToRegExp(x).test(file)));
+
+// The test gate(s) to run at this point in the lifecycle. Returns an array — a polyglot repo
+// needs more than one.
+//
+// scoped → prefer gates.testChanged, which tests only what this feature touched. Two forms:
+//
+//   "testChanged": "npx vitest related --run {files}"        one runner owns the whole repo
+//
+//   "testChanged": [                                          several runners, routed by path
+//     { "match": ["backend/**/*.py"],        "cmd": "python -m pytest {files}" },
+//     { "match": ["frontend/**/*.{ts,tsx}"], "cmd": "npx vitest related --run {files}" },
+//     { "match": ["docs/**", "**/*.md"],     "cmd": "" }
+//   ]
+//
+// The routed form is the one that matters on a real project: a single command string gets EVERY
+// changed path substituted into it, so a frontend-only change would hand .tsx files to pytest.
+// Routed, each entry sees only its own files, and an entry with nothing to do is skipped — which
+// is where the time actually goes: a frontend feature never starts the backend suite at all.
+//
+// An empty `cmd` claims files and runs nothing — the explicit way to say "changes here need no
+// tests". Anything matching NO entry falls back to the FULL suite: an unrecognised path might be
+// the one that breaks everything, and a green that skipped it would be a lie. That fallback is
+// announced, because a silently-full suite looks like the scoping simply isn't working.
+function testGates(scoped) {
+  const spec = scoped ? gates.testChanged : null;
+  const full = gates.test ? [{ key: 'test', label: 'test', cmd: gates.test }] : [];
+
+  if (!spec || (Array.isArray(spec) && !spec.length)) return full;
+
+  // Single-command form.
+  if (typeof spec === 'string') {
+    if (!spec.includes('{files}')) return [{ key: 'testChanged', label: 'test (changed)', cmd: spec }];
+    const files = changedFiles();
+    if (!files.length) return []; // nothing touched → nothing to scope a run to
+    return [{ key: 'testChanged', label: 'test (changed)', cmd: spec.replace('{files}', quote(files)) }];
+  }
+
+  if (!Array.isArray(spec)) return full; // malformed → prove everything rather than nothing
+
+  const files = changedFiles();
+  if (!files.length) return [];
+
+  const list = [];
+  const claimed = new Set();
+  for (const entry of spec) {
+    if (!entry || typeof entry.cmd !== 'string') continue;
+    const mine = files.filter((f) => matchesAny(f, entry.match));
+    if (!mine.length) continue;
+    mine.forEach((f) => claimed.add(f));
+    if (!entry.cmd) continue; // claimed, deliberately untested
+    const name = entry.name || firstToken(entry.cmd) || 'changed';
+    list.push({
+      key: 'testChanged',
+      label: `test (changed: ${name})`,
+      cmd: entry.cmd.includes('{files}') ? entry.cmd.replace('{files}', quote(mine)) : entry.cmd,
+    });
+  }
+
+  const unrouted = files.filter((f) => !claimed.has(f));
+  if (unrouted.length && full.length) {
+    console.error(`ristretto: ${unrouted.length} changed file(s) match no "testChanged" route — running the FULL test gate instead of a partial one.`);
+    console.error(`  unrouted: ${unrouted.slice(0, 5).join(', ')}${unrouted.length > 5 ? ` (+${unrouted.length - 5} more)` : ''}`);
+    console.error('  Add a route for them, or an entry with "cmd": "" to say they need no tests.');
+    return full;
+  }
+  return list;
 }
 
 // The gates for one pass, in order. Lint and typecheck are always repo-wide: they're cheap
@@ -374,8 +434,7 @@ function gateList(scoped) {
   for (const key of ['lint', 'typecheck']) {
     if (gates[key]) list.push({ key, label: key, cmd: gates[key] });
   }
-  const test = testGate(scoped);
-  if (test) list.push(test);
+  list.push(...testGates(scoped));
   return list;
 }
 
