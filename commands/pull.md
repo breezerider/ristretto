@@ -52,9 +52,23 @@ The plugin ships deterministic gate hooks: while a pull is active, a Stop hook r
    }
    ```
 
+   That example is a JS/TS repo — **it is an illustration of the shape, not a template to copy.** Write the commands this repo actually uses: `ruff check .` / `mypy .` / `pytest`, `./gradlew spotlessApply check test`, `flutter analyze` / `flutter test`, `dotnet format` / `dotnet build` / `dotnet test`, `cargo fmt` / `cargo clippy` / `cargo test`, `go vet ./...` / `go test ./...`. A gate that names a tool the repo doesn't have is worse than an empty one.
+
    `{file}` is replaced with the touched file (format only). `.ristretto.json` belongs in git; also add `.ristretto/` (transient state) to `.gitignore` if it isn't there.
 
-   **Always set `formatPaths` — scope the formatter to the paths it actually owns.** Unscoped, the format hook rewrites every file anyone edits, including documentation and generated files it was never run over. A two-line edit to a README comes back as a hundred-line reflow, and because each attempted fix re-triggers it, the churn can eat entire review rounds before anyone works out that the *gate* is what keeps changing the file. List the code directories and extensions your formatter is canonical for; everything else is left alone. Add it to an existing `.ristretto.json` that lacks it — this is a config migration, not a preference.
+   **Always set `formatPaths` — scope the formatter to the paths it actually owns.** Unscoped, the format hook rewrites every file anyone edits, including documentation and generated files it was never run over. A two-line edit to a README comes back as a hundred-line reflow, and because each attempted fix re-triggers it, the churn can eat entire review rounds before anyone works out that the *gate* is what keeps changing the file. List what your formatter is canonical for; everything else is left alone. Patterns are globs against repo-relative paths and support `**`, `*`, `?` and `{a,b}`:
+
+   | stack | typical `formatPaths` |
+   |---|---|
+   | JS / TS / Angular / React | `["src/**/*.{ts,tsx,js,jsx,mjs,cjs,css,scss,html}"]` |
+   | Python | `["**/*.py"]` |
+   | Java / Kotlin | `["src/**/*.{java,kt,kts}"]` |
+   | Dart / Flutter | `["lib/**/*.dart", "test/**/*.dart"]` |
+   | Go | `["**/*.go"]` |
+   | C# / .NET | `["**/*.{cs,csproj}"]` |
+   | Rust | `["**/*.rs"]` |
+
+   The risk scales with how promiscuous the formatter is: a language-scoped one (`black`, `gofmt`, `dart format`) only ever touches its own extension, so scoping it is cheap insurance. A general one (`prettier`, `dprint`) will happily reformat Markdown, YAML, and generated output — there, scoping is the difference between a working gate and a recurring trap. **Add it to an existing `.ristretto.json` that lacks it** — this is a config migration, not a preference.
 
    **Every command must be self-contained.** The hooks run in their own environment and **do not inherit a PATH you exported in your shell**. If a repo needs a specific toolchain — a second SDK install, a version manager shim, a workaround build — put that path in the command itself (`C:\flutter\bin\flutter test`, `./node_modules/.bin/vitest run`). A gate that only works because of a PATH tweak you made by hand will pass your pre-flight and fail in the hook, on a tree you never touched, and the red will look like a repo problem. `verify` records which binary it resolved and the hook says so out loud when it resolves a different one — but the fix is to not let them differ.
 
@@ -66,9 +80,16 @@ The plugin ships deterministic gate hooks: while a pull is active, a Stop hook r
    |---|---|
    | vitest | `npx vitest related --run {files}` |
    | jest | `npx jest --findRelatedTests {files} --passWithNoTests` |
+   | karma / Angular | `npx ng test --watch=false --include {files}` |
    | pytest | `python -m pytest {files}` |
-   | flutter | `flutter test {files}` |
-   | go | *(usually fast enough — leave empty and let `test` run)* |
+   | flutter / dart | `flutter test {files}` |
+   | go | `go test ./...` *(usually fast enough — leave empty and let `test` run)* |
+   | gradle | `./gradlew test --tests {files}` *(or leave empty; Gradle's own up-to-date checks already skip unaffected work)* |
+   | maven | *(no reliable per-file selection — leave empty and rely on `test`)* |
+   | dotnet | `dotnet test --filter FullyQualifiedName~{files}` *(needs class names, not paths — often better left empty)* |
+   | rust | `cargo test` *(incremental by default — leave empty)* |
+
+   **Leave it empty whenever the runner can't scope honestly.** A `testChanged` that maps paths to the wrong tests is worse than no scoping at all: it reports green while proving nothing, and the loop is built on trusting that green. Maven, and any runner that selects by fully-qualified class name rather than file path, are exactly this case — an empty `testChanged` just falls back to the full `test` gate, which is always correct and sometimes slow. Slow is recoverable; a dishonest green is not.
 
    **Prefer the `{files}` forms over a runner's own change detection.** `vitest --changed`, `jest -o` and friends read git's diff, which does not include untracked files — and a brand-new test file is exactly what red-first produces, so the tests that prove this feature would be the ones skipped. Leave `testChanged` as `""` when the suite is already quick; the loop then runs the full gate as it always did.
 
@@ -211,6 +232,12 @@ Then act on the verdict — **capped at 2 rounds, never a ping-pong**:
 Once criteria are met:
 
 1. **Commit** (unless `nocommit` was passed): stage only the files you touched — never `git add -A` — and commit with a conventional message: `feat(<FEATURE-ID>): <short summary>`. Record the commit hash. If `nocommit` was passed, leave the changes uncommitted in the working tree and say so; the user will commit themselves.
+
+   **Writing the message safely — this is where closers get into trouble.** A subject passed inline through a shell is re-interpreted by that shell, and the characters that break it are ordinary in a summary: `@` (npm scopes, `@Override`, decorators, emails), backticks, `$`, `!`, and quotes. A mangled subject then tempts a repair with `--force` or `--amend`, which is forbidden — so the fix belongs *before* the commit, not after.
+
+   - **Default: keep the subject plain.** ASCII, one line, no backticks, `@`, `$`, `!`, or quote characters. Almost every summary can be written this way, and then a plain `-m` is safe on every shell.
+   - **If the summary genuinely needs those characters, or spans more than one line:** write the message to a file and commit with `git commit -F <path>`, then delete the file. Do **not** reach for a heredoc — it is unreliable in this environment.
+   - **Never** repair a bad message with `--amend`. If a message came out wrong, that is worth reporting; rewriting history is not on the table.
    - **Never** push, set an upstream, `--force`, amend or reset existing commits, or open a PR. Local and append-only.
 2. **Correct `Provides:` to whatever was actually built**, then append an `## Evidence` section to the plan (the proof from step 9, a one-line gate summary like `gates: lint ✓ typecheck ✓ test ✓`, and the review verdict — `review: clean`, `review: N findings resolved`, `review: skipped (trivial diff)`, or `review: skipped (raw)`), then move `docs/ristretto/plans/<FEATURE-ID>.md` → `docs/ristretto/plans/archived/<FEATURE-ID>.md`. A `Provides:` that drifted during implementation and was never corrected poisons every dependent feature — the archived plan is what the next feature's planner reads as fact.
 3. Update the roadmap row: set Updated to today, append the files touched and the commit hash (or `uncommitted` if `nocommit`, plus `raw` if this was a raw pull), and set the status:

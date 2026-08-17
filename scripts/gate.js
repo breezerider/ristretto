@@ -46,17 +46,30 @@ const MODE = process.argv[2] || 'quick';
 const ARG = process.argv[3] || '';
 const MAX_RETRIES = 3;
 
-// Seconds a gate run will wait for the lock before giving up and reporting UNVERIFIED.
-const DEFAULT_LOCK_WAIT = 900;
+// Seconds a gate run will wait for the lock. The holder is self-limiting — its own silence
+// watchdog kills it, and the hook backstop is 3600s — so this ceiling sits just under that,
+// rather than at a number picked from how long one repo's suite happens to take. A repo whose
+// suite honestly runs forty minutes must never be told its gates could not be verified.
+const DEFAULT_LOCK_WAIT = 3300;
 
-// A marker this old is left over from a session that died, not from a live pull. Honouring it
-// arms the gates on a session that never asked for them — the stale-marker trap.
-const MARKER_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+// A lock file older than this is stale whatever its pid says. Liveness alone is not enough:
+// pids get recycled, so a dead holder's number can come back as an unrelated process and the
+// lock would look held forever. Nothing can legitimately hold it this long — the hook backstop
+// is an hour, and every path that takes the lock releases it on exit.
+const LOCK_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+
+// A marker with no gate activity for this long belongs to a session that died, not to a live
+// pull. Every armed run touches the marker, so this measures IDLENESS, not age — an unattended
+// batch that runs for three days keeps its own gates armed the whole time, while a marker left
+// behind by a crashed session ages out instead of arming a session that never asked for it.
+const MARKER_MAX_IDLE_MS = 24 * 60 * 60 * 1000;
 
 // Seconds a gate may produce NO output before it's treated as hung.
-// lint and typecheck get a long rope on purpose: tools like `tsc --noEmit` and `eslint .` print
-// nothing at all until they finish, so their silence carries no information. Test runners stream
-// progress, so silence from one is a much stronger signal.
+// lint and typecheck get a long rope on purpose: whole-project analysers print nothing at all
+// until they finish — a type checker, a linter over the whole tree, a compile step — so their
+// silence carries no information whatsoever. Test runners stream progress as they go, so silence
+// from one is a much stronger signal. These are budgets per gate KIND, not per tool, which is
+// why they hold across every stack rather than needing a table of runners.
 const DEFAULT_SILENCE = { format: 30, lint: 600, typecheck: 600, test: 300, testChanged: 300 };
 
 // Hard duration caps, seconds. OFF by default — a slow gate is not a broken gate. `format` is the
@@ -145,9 +158,10 @@ async function acquireLock(label) {
       if (e.code !== 'EEXIST') return true;
       let held = null;
       try { held = JSON.parse(fs.readFileSync(lockPath, 'utf8')); } catch { /* torn or empty */ }
-      if (!held || !alive(held.pid)) {
+      const tooOld = held && Number.isFinite(held.at) && Date.now() - held.at > LOCK_MAX_AGE_MS;
+      if (!held || !alive(held.pid) || tooOld) {
         try { fs.unlinkSync(lockPath); } catch { /* someone else cleaned up first */ }
-        continue; // the holder died — steal it
+        continue; // the holder died, or its pid was recycled by something unrelated — steal it
       }
       if (Date.now() >= deadline) return false;
       await sleep(POLL_MS);
@@ -164,6 +178,17 @@ function releaseLock() {
   holdsLock = false;
 }
 process.on('exit', releaseLock);
+
+// Consume one unit of the shared retry budget and report the new count. Every path that blocks
+// the agent goes through here, so no failure mode — red gates, an unreachable lock — can loop
+// without bound. A green run clears it.
+function bumpRetries() {
+  let retries = 0;
+  try { retries = parseInt(fs.readFileSync(retriesPath, 'utf8'), 10) || 0; } catch { /* first one */ }
+  retries += 1;
+  try { fs.mkdirSync(path.dirname(retriesPath), { recursive: true }); fs.writeFileSync(retriesPath, String(retries)); } catch { /* best-effort */ }
+  return retries;
+}
 
 function lockHolder() {
   try {
@@ -204,7 +229,9 @@ function globToRegExp(glob) {
       re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
     }
   }
-  return new RegExp(`^${re}$`);
+  // Windows and macOS resolve paths case-insensitively; a pattern written `src/**` must not
+  // silently stop matching because an editor or a tool handed us `Src/...`.
+  return new RegExp(`^${re}$`, process.platform === 'linux' ? '' : 'i');
 }
 
 function formatAllowed(file) {
@@ -417,7 +444,7 @@ function hangAdvice(gate, result) {
     `ristretto: gate '${gate.label}' ${why}.`,
     `  A hung gate is not a red gate — the work is UNVERIFIED, not proven broken.`,
     `  Find what it's waiting on (an open handle, a port, watch mode, a prompt), or:`,
-    `  · scope the run — set "gates"."testChanged" (e.g. "npx jest --findRelatedTests {files}")`,
+    `  · scope the run — set "gates"."testChanged" to your runner's related-tests form, with {files}`,
     `  · if the tool is simply quiet for long stretches, raise "silence"."${gate.key}" (now ${silence[gate.key]}s)`,
   ].join('\n');
 }
@@ -505,13 +532,17 @@ async function main() {
 
     // A marker nobody disarmed keeps gating sessions that are not pulls. Age it out rather than
     // silently arming a session that never asked — and say so, so it gets cleaned up.
-    let markerAge = null;
-    try { markerAge = Date.now() - fs.statSync(markerPath).mtimeMs; } catch { /* keep gating */ }
-    if (markerAge !== null && markerAge > MARKER_MAX_AGE_MS) {
-      console.error(`ristretto: .ristretto/pulling is ${Math.round(markerAge / 3600000)}h old — treating it as a leftover from a dead session and NOT gating.`);
+    let markerIdle = null;
+    try { markerIdle = Date.now() - fs.statSync(markerPath).mtimeMs; } catch { /* keep gating */ }
+    if (markerIdle !== null && markerIdle > MARKER_MAX_IDLE_MS) {
+      console.error(`ristretto: .ristretto/pulling has seen no gate run for ${Math.round(markerIdle / 3600000)}h — treating it as a leftover from a dead session and NOT gating.`);
       console.error('  If a pull really is in progress, touch the marker; otherwise delete it.');
       process.exit(0);
     }
+    // This run counts as activity. Without it, "old" would mean total age and a batch that runs
+    // longer than the window would disarm its own gates halfway through — the exact opposite of
+    // what an unattended run needs.
+    try { const t = Date.now() / 1000; fs.utimesSync(markerPath, t, t); } catch { /* best-effort */ }
 
     // brew's orchestrator writes no source and its subagents are gated one by one. Running a
     // suite here measures a tree that a live subagent is mid-edit on — the red belongs to a
@@ -526,10 +557,20 @@ async function main() {
 
     // Serialise. A gate that runs alongside another one measures both.
     if (!(await acquireLock(IS_SUBAGENT ? 'subagent stop' : 'stop'))) {
-      console.error(`ristretto: gates did not run — ${lockHolder()} still holds the gate lock after ${lockWait}s.`);
-      console.error('  This stop is UNVERIFIED, not green. Two suites at once invent failures that belong to neither,');
-      console.error('  so ristretto waits rather than reporting a red it cannot trust. Re-run the gates once that finishes.');
-      process.exit(0);
+      // BLOCK, don't wave through. Unlike a hang, a lock conflict is transient and clears on its
+      // own, so retrying is the right move — and exiting 0 here would let a stop through with the
+      // gates never run, which is precisely the self-reporting this whole mechanism exists to
+      // replace. Bounded by the normal retry budget, so it can never loop forever.
+      const held = lockHolder();
+      if (bumpRetries() > MAX_RETRIES) {
+        console.error(`ristretto: could not get the gate lock after ${MAX_RETRIES} attempts — ${held} appears wedged. Surfacing instead of looping; the work is UNVERIFIED.`);
+        process.exit(0);
+      }
+      console.error(`ristretto: the gates could not run — ${held} still holds the gate lock after ${lockWait}s.`);
+      console.error('  Nothing is wrong with your work: two suites at once invent failures that belong to neither run,');
+      console.error('  so ristretto waits rather than report a red it cannot trust. This stop is UNVERIFIED, not green.');
+      console.error('  Wait for that run to finish and run the gates again. Do not start a second suite yourself.');
+      process.exit(2);
     }
 
     // The holder may have proven exactly the tree we came to test while we waited.
