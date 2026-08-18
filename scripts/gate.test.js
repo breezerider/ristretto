@@ -633,4 +633,29 @@ arm(dir);
 r = gate(dir, 'verify');
 assert.ok(!r.stderr.includes('missing a flag'), 'a corrected config must produce no advice at all');
 
+// 60. THE SILENT ONE. A leftover `orchestrating` marker turns Stop gating off — no error, no
+//     symptom, nothing to notice until something red is committed. A brew that dies without
+//     disarming leaves exactly that behind, and before this the exemption never expired.
+dir = tmpRepo(JSON.stringify({ gates: { test: COUNT } }));
+arm(dir);
+const orchPath = path.join(dir, '.ristretto', 'orchestrating');
+fs.writeFileSync(orchPath, '');
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 0, 'a live brew orchestrator is still exempt');
+assert.strictEqual(runs(dir), 0, 'and exempt means no gate ran');
+
+const stale = Date.now() / 1000 - 3 * 60 * 60; // 3h without a single subagent stop
+fs.utimesSync(orchPath, stale, stale);
+r = gate(dir, 'full');
+assert.ok(r.stderr.includes('leftover from a dead brew'), 'a stale exemption must be named, not honoured');
+assert.strictEqual(runs(dir), 1, 'and the gates must actually run — an expired exemption is no exemption');
+
+// 61. A subagent stopping is the only thing that proves the loop is alive, so it — and nothing
+//     else — keeps the exemption current. Without this a long feature would expire its own brew.
+r = gate(dir, 'full', undefined, {}, 'subagent');
+assert.ok(Date.now() - fs.statSync(orchPath).mtimeMs < 60 * 1000,
+  'a subagent gate must refresh the exemption it runs under');
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 0, 'and the orchestrator is exempt again once the loop has proven itself alive');
+
 console.log('gate.test.js: all checks passed');

@@ -70,6 +70,19 @@ const LOCK_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 // behind by a crashed session ages out instead of arming a session that never asked for it.
 const MARKER_MAX_IDLE_MS = 24 * 60 * 60 * 1000;
 
+// The orchestrator's exemption gets a far shorter rope than the pulling marker, because the two
+// fail in opposite directions. A stale `pulling` gates a session that never asked for it: annoying,
+// and obvious the moment it happens. A stale `orchestrating` turns Stop gating OFF, which has no
+// symptom at all — work simply stops being checked. A live brew stops a subagent every few minutes,
+// so hours of silence is not a slow feature; it is a loop that is no longer running.
+const ORCHESTRATOR_MAX_IDLE_MS = 2 * 60 * 60 * 1000;
+
+// null when it cannot be read at all — the caller decides what to do with "unknown", and every
+// caller here chooses the safe direction rather than the convenient one.
+function markerIdleMs(p) {
+  try { return Date.now() - fs.statSync(p).mtimeMs; } catch { return null; }
+}
+
 // Seconds a gate may produce NO output before it's treated as hung.
 // lint and typecheck get a long rope on purpose: whole-project analysers print nothing at all
 // until they finish — a type checker, a linter over the whole tree, a compile step — so their
@@ -179,6 +192,13 @@ async function acquireLock(label) {
       try { held = JSON.parse(fs.readFileSync(lockPath, 'utf8')); } catch { /* torn or empty */ }
       const tooOld = held && Number.isFinite(held.at) && Date.now() - held.at > LOCK_MAX_AGE_MS;
       if (!held || !alive(held.pid) || tooOld) {
+        // Say it. A lock outlives its holder only when that run was killed rather than finishing,
+        // and that is the one trace such a death leaves anywhere — the agent it belonged to is
+        // gone with its output. Stealing it silently is correct and also throws away the only
+        // evidence that anything went wrong at all.
+        if (held && !announced) {
+          console.error(`ristretto: a previous gate run (${held.label || 'unknown'}, pid ${held.pid}) left its lock behind — it was killed, not finished. Taking it over.`);
+        }
         try { fs.unlinkSync(lockPath); } catch { /* someone else cleaned up first */ }
         continue; // the holder died, or its pid was recycled by something unrelated — steal it
       }
@@ -692,8 +712,7 @@ async function main() {
 
     // A marker nobody disarmed keeps gating sessions that are not pulls. Age it out rather than
     // silently arming a session that never asked — and say so, so it gets cleaned up.
-    let markerIdle = null;
-    try { markerIdle = Date.now() - fs.statSync(markerPath).mtimeMs; } catch { /* keep gating */ }
+    const markerIdle = markerIdleMs(markerPath);
     if (markerIdle !== null && markerIdle > MARKER_MAX_IDLE_MS) {
       console.error(`ristretto: .ristretto/pulling has seen no gate run for ${Math.round(markerIdle / 3600000)}h — treating it as a leftover from a dead session and NOT gating.`);
       console.error('  If a pull really is in progress, touch the marker; otherwise delete it.');
@@ -704,10 +723,28 @@ async function main() {
     // what an unattended run needs.
     try { const t = Date.now() / 1000; fs.utimesSync(markerPath, t, t); } catch { /* best-effort */ }
 
+    // A subagent stopping is the only proof that a brew loop is actually alive — nothing else
+    // produces one. So that, and only that, keeps the orchestrator's exemption current.
+    if (IS_SUBAGENT && fs.existsSync(orchestratingPath)) {
+      try { const t = Date.now() / 1000; fs.utimesSync(orchestratingPath, t, t); } catch { /* best-effort */ }
+    }
+
     // brew's orchestrator writes no source and its subagents are gated one by one. Running a
     // suite here measures a tree that a live subagent is mid-edit on — the red belongs to a
     // half-finished cycle, not to anyone's work, and it burns the retry budget to say so.
-    if (!IS_SUBAGENT && fs.existsSync(orchestratingPath)) process.exit(0);
+    //
+    // But this exemption TURNS GATES OFF, so unlike the pulling marker it may never be taken on
+    // faith. A brew that dies without disarming leaves this file behind, and an exemption that
+    // never expires means every later session in that repo stops ungated — silently, with no
+    // symptom until something red is committed. Being wrong the other way costs one unnecessary
+    // suite on a tree a subagent may be mid-edit on: recoverable, and loud.
+    if (!IS_SUBAGENT && fs.existsSync(orchestratingPath)) {
+      const idle = markerIdleMs(orchestratingPath);
+      if (idle !== null && idle <= ORCHESTRATOR_MAX_IDLE_MS) process.exit(0);
+      const age = idle === null ? 'an unreadable age' : `${Math.round(idle / 3600000)}h`;
+      console.error(`ristretto: .ristretto/orchestrating has seen no subagent gate for ${age} — treating it as a leftover from a dead brew and gating normally.`);
+      console.error('  If a brew really is running, touch the file; if not, delete it. Leaving it would turn Stop gating off for good.');
+    }
 
     // Tree unchanged since the last green run → already proven, skip.
     const fp = treeFingerprint();

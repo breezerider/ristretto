@@ -91,7 +91,7 @@ While an eligible feature exists:
    > 4. Read the repo's house rules — `CLAUDE.md` / `AGENTS.md`, including any nested one near the files you touch. They bind you even where the surrounding code doesn't demonstrate them yet. Never write to those files.
    > 5. Verify: run the gates (`.ristretto.json`); fix until green. A SubagentStop gate will also verify you independently — never weaken, skip, or delete gates or tests to get green. **Never sit in one silent command for more than about five minutes.** You are killed if you go quiet for ten, and being killed is the worst of all endings: your result is lost entirely, so the orchestrator gets no answer rather than a failure it could act on, and everything you built is stranded unproven in the tree. So for anything that might run long — a full suite, a slow build, a run that queues behind the repo-wide gate lock — **start it in the background and poll it to completion**, checking every 30–60 seconds. Each check is a sign of life, and the wait costs nothing extra.
    >
-   >    Backgrounding is only fatal if you **end your turn** on it: then you die, the run is orphaned or keeps going without you, and your result is lost the same way. So never do that — you stay until it finishes and you report what it actually said. A gate you did not see finish is not a gate you passed. Short gates (lint, typecheck, a scoped test run) can simply run in the foreground. If a run seems to hang at the start it is most likely queued — only one gate run executes at a time repo-wide, and it now says so out loud when it is waiting.
+   >    **Never end a turn with a run still in flight.** That is the whole of it, and it is the half of this rule that gets dropped: backgrounding a gate and then ending your turn is not "running the gates in the background", it is not running them at all — you die, the run is orphaned or finishes for nobody, and your result is lost exactly as if you had been killed. Background *and* poll, or run it in the foreground; there is no third option where you start something and leave. A gate you did not watch finish is not a gate you passed. Short gates (lint, typecheck, a scoped test run) can simply run in the foreground. If a run seems to hang at the start it is most likely queued — only one gate run executes at a time repo-wide, and it now says so out loud when it is waiting.
    > 6. **Do NOT commit, archive, or touch the roadmap** — an independent review happens after you.
    > 7. **Skip, never guess.** If you hit a real product decision the plan doesn't make, a missing contract, a blocker prep didn't see, or gates you cannot get green honestly: `git restore` every file you touched (leave the tree clean), set the roadmap row to `blocked` with a one-line reason **phrased as the spec gap** — what the plan failed to decide, not what the code couldn't do ("acceptance criterion 'fast' isn't measurable — needs a number") — and stop there.
    > 8. **A manual check is not a block, and never a `git restore`.** If a criterion can only be proven once a human runs something (SQL, a migration, a secret, a console switch) **or looks at something no test can judge** (a layout, a visual state, copy in another language), the code still gets written and the gates still go green — you skip the test that needs the live environment and keep going. Make sure the check is in `docs/ristretto/manual-checks.md`, naming the criterion it proves and the exact command or thing to look at, and report it. Never tick a box there.
@@ -130,7 +130,13 @@ While an eligible feature exists:
 8. **Hygiene check** (cheap, no reading): `git status --short` must be clean before the next feature's planner is dispatched. If a subagent died mid-work and left changes, `git restore` them and set that row to `blocked` (reason: "implementation aborted mid-work — re-brew or refine"). Delete any leftover `.ristretto/build/<FEATURE-ID>.md` for a feature that blocked.
 9. Next eligible feature.
 
-## After the loop
+## When you stop — for any reason
+
+**This section is not "after a successful loop". It runs whenever this command stops running**, and the abnormal endings are the ones it exists for: the pot is empty, or a feature blocked, or something died, or you believe you were interrupted, or you are simply out of room to continue. "The loop didn't finish" is the reason to do this, never a reason to skip it. A brew that ends without it leaves the next session a repo it will misread — armed markers, a stranded tree — and that has now happened more than once.
+
+**Before you write a single word of the report, run `git status --short`, and describe only what it printed.** Never state what is or isn't in the tree from memory of what you dispatched: a subagent that died still wrote files, and "nothing is stranded" is a claim that has been wrong exactly when it mattered most. If it is dirty, that is loop step 6 — handle it there, then report what you did.
+
+Then, in order:
 
 1. **Run the full suite — once, over everything.** The loop gated each feature against `testChanged`, which only ever proved the files that feature touched. Nothing yet has proven that feature 7 didn't break feature 2. So before you disarm anything:
 
@@ -151,7 +157,11 @@ While an eligible feature exists:
      This is the known cost of scoping tests during the loop, and it's the right trade — a fast batch with one honest red at the end beats a batch too slow to finish. What isn't acceptable is a quiet one.
    - **A gate killed as hung** is neither: report the batch as unverified, name the gate, and point at what it might be waiting on / `silence` in `.ristretto.json`.
 
-2. **Disarm the gates:** delete `.ristretto/pulling` and `.ristretto/orchestrating`, and `.ristretto/gate-retries` / `.ristretto/gate-stalled` if present, and delete any remaining `.ristretto/build/` files. Do this even if the loop aborts.
+2. **Disarm the gates — this one is not optional and not last.** Delete `.ristretto/pulling` and `.ristretto/orchestrating`, and `.ristretto/gate-retries` / `.ristretto/gate-stalled` if present, and delete any remaining `.ristretto/build/` files. If step 1 could not run at all, do this anyway, first.
+
+   `orchestrating` is the dangerous one to leave behind: while it exists the Stop hook does not gate, so a leftover turns the gates off for every later session in that repo — with no error, no symptom, and nothing to notice until something red is committed. The runner now expires it after a couple of hours without a subagent gate, but that is a backstop for the case where you never got to run at all, not permission to skip this.
+
+   Keep `.ristretto/build/<ID>.md` for a feature you planned but did not implement, and say in the report that it is there — the next brew re-plans from HEAD by default, and a plan the user paid for is worth naming before it is silently redone.
 3. **Report:** the full-suite verdict, features brewed (with commit hashes), features `needs-human` (each with its check), features `blocked` (each with its spec gap — suggest refining them and re-running), the branch name, and any suggestions the subagents surfaced — do not add those to the roadmap and do not fix them.
 
    If any checks are outstanding, close with the checklist pointer — this is the whole point of writing them down:
