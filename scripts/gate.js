@@ -325,8 +325,13 @@ function run(cmd, { silenceSec, hardCapSec }) {
     const startedAt = lastOutput;
     let stalled = false;
     let hardCapped = false;
+    // The longest this gate went without saying anything. On a run that ends green this is a
+    // measurement of how talkative the tool actually is — which is the thing the silence budget
+    // was guessing at, and the only honest way to know it for a runner nobody anticipated.
+    let maxQuiet = 0;
 
     const capture = (buf) => {
+      maxQuiet = Math.max(maxQuiet, Date.now() - lastOutput);
       lastOutput = Date.now();
       chunks.push(buf);
       size += buf.length;
@@ -351,6 +356,9 @@ function run(cmd, { silenceSec, hardCapSec }) {
     const finish = (code) => {
       clearInterval(watchdog);
       const output = Buffer.concat(chunks).toString('utf8');
+      // The tail counts too: a gate whose last word comes early and then works in silence until it
+      // exits is exactly the shape this is here to learn.
+      lastRunMaxQuietMs = Math.max(maxQuiet, Date.now() - lastOutput);
       if (stalled || hardCapped) {
         return resolve({ output, stalled, hardCapped, quietFor: Math.round((Date.now() - lastOutput) / 1000) });
       }
@@ -563,7 +571,46 @@ function gateList(scoped) {
   return list;
 }
 
-const budget = (gate) => ({ silenceSec: silence[gate.key], hardCapSec: hardCaps[gate.key] });
+// --- Self-calibrating silence budgets. ---
+// Setting PYTHONUNBUFFERED fixes the loudest offender, but naming tools one at a time is how you
+// end up with a table that covers the five stacks somebody thought of. The general problem is that
+// a silence budget is a *guess* about how talkative a runner is, and every guess is wrong for some
+// repo — a .NET build that says nothing for four minutes, a Gradle task between phases, a suite
+// that simply grew. So stop guessing and measure: a gate that has finished GREEN has, by
+// definition, proven that its longest silence was healthy. Nothing else needs to know why.
+//
+// This can only ever widen a budget, never narrow one, so it cannot introduce a kill that would
+// not have happened anyway — and the ceiling keeps a genuine hang from becoming unkillable.
+const QUIET_SLACK = 2;                      // observed silences vary run to run; leave real room
+const QUIET_FLOOR_MS = 60 * 1000;           // absolute slack, so a chatty gate still tolerates a pause
+const QUIET_CEILING_MS = 30 * 60 * 1000;    // beyond this it is a hang, whatever it has done before
+const quietPath = path.join(projectDir, '.ristretto', 'gate-quiet.json');
+let lastRunMaxQuietMs = 0;
+
+let observedQuiet = {};
+try { observedQuiet = JSON.parse(fs.readFileSync(quietPath, 'utf8')) || {}; } catch { /* first run */ }
+
+// Only ever called after a gate came back green.
+function recordQuiet(key, ms) {
+  if (!key || !Number.isFinite(ms)) return;
+  if (observedQuiet[key] === ms) return;
+  observedQuiet[key] = ms;
+  try {
+    fs.mkdirSync(path.dirname(quietPath), { recursive: true });
+    fs.writeFileSync(quietPath, JSON.stringify(observedQuiet));
+  } catch { /* calibration is an optimisation, never a requirement */ }
+}
+
+const budget = (gate) => {
+  const configuredSec = silence[gate.key];
+  const observed = observedQuiet[gate.key];
+  let silenceSec = configuredSec;
+  if (configuredSec && Number.isFinite(observed)) {
+    const widenedMs = Math.min(observed * QUIET_SLACK + QUIET_FLOOR_MS, QUIET_CEILING_MS);
+    silenceSec = Math.max(configuredSec, Math.round(widenedMs / 1000));
+  }
+  return { silenceSec, hardCapSec: hardCaps[gate.key] };
+};
 
 // --- Which binary is this gate actually going to run? ---
 // A pre-flight run by the agent and a gate run by the hook inherit different environments. If
@@ -694,6 +741,7 @@ async function main() {
     for (const gate of gateList(false)) {
       const result = await run(gate.cmd, budget(gate));
       if (result === null) {
+        recordQuiet(gate.key, lastRunMaxQuietMs);
         results.push(`${gate.label} ✓`);
         continue;
       }
@@ -809,6 +857,8 @@ async function main() {
       const gateStartedAt = Date.now();
       const result = await run(gate.cmd, budget(gate));
       if (result === null) {
+        // Green: whatever silence this gate showed was healthy silence. That is the calibration.
+        recordQuiet(gate.key, lastRunMaxQuietMs);
         // A full suite ran because nothing scoped it. Remember how long that cost — the config
         // instruction to add `testChanged` is easy to skip on a repo that already looks set up,
         // and this is the one place that knows, from measurement, that it was worth doing.

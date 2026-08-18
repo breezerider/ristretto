@@ -682,4 +682,40 @@ assert.ok(r.stderr.includes("waiting on (an open handle"), 'and it must still ge
 // 64. Unverified is unverified: diagnosing the cause must never quietly turn a killed gate green.
 assert.ok(r.stderr.includes('UNVERIFIED'), 'a killed gate stays unverified whatever the explanation');
 
+// 65. THE GENERAL FORM OF THE PYTHON BUG. A silence budget is a guess about how talkative a runner
+//     is, and every guess is wrong for some repo — a .NET build quiet for minutes, a Gradle phase
+//     gap, or simply a suite that grew past it. So a gate that finished GREEN has proven its own
+//     longest silence was healthy, and that measurement widens the budget. No tool names involved.
+const PAUSER = `node -e "console.log('a'); setTimeout(()=>{console.log('b'); process.exit(0);}, 2500)"`;
+dir = tmpRepo(JSON.stringify({ gates: { test: PAUSER }, silence: { test: 5 } }));
+arm(dir);
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 0, 'the calibrating run must pass on its generous budget');
+const quiet = JSON.parse(fs.readFileSync(path.join(dir, '.ristretto', 'gate-quiet.json'), 'utf8'));
+assert.ok(quiet.test >= 2000, `the healthy silence must be recorded (got ${quiet.test}ms)`);
+
+// Now starve the configured budget. Before calibration this gate is killed at 1s; after it, the
+// gate's own proven behaviour wins — which is exactly what a suite growing past 300s needed.
+fs.writeFileSync(path.join(dir, '.ristretto.json'), JSON.stringify({ gates: { test: PAUSER }, silence: { test: 1 } }));
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 0, 'a gate must not be killed for a silence it has already proven healthy');
+assert.ok(!r.stderr.includes('printed nothing for'), 'and it must not be called hung at all');
+
+// 66. Calibration may only ever LOOSEN, and never past the point where a real hang is unkillable.
+//     A measurement that could tighten a budget would invent kills; one without a ceiling would
+//     let a wedged gate run forever on the strength of a good day.
+assert.ok(/Math\.max\(configuredSec, Math\.round\(widenedMs \/ 1000\)\)/.test(gateSrc2()),
+  'the widened budget must be a max() against the configured one — never a replacement');
+assert.ok(/Math\.min\(observed \* QUIET_SLACK \+ QUIET_FLOOR_MS, QUIET_CEILING_MS\)/.test(gateSrc2()),
+  'and it must be capped, so no history can make a hang unkillable');
+function gateSrc2() { return fs.readFileSync(path.join(__dirname, 'gate.js'), 'utf8'); }
+
+// 67. A gate that never went green must never be calibrated — otherwise a hang teaches the runner
+//     to tolerate itself, and the budget grows every time it wedges.
+dir = tmpRepo(JSON.stringify({ gates: { test: STALL }, silence: { test: 1 } }));
+arm(dir);
+gate(dir, 'full');
+assert.ok(!fs.existsSync(path.join(dir, '.ristretto', 'gate-quiet.json')),
+  'a killed gate must record nothing — only green runs are evidence');
+
 console.log('gate.test.js: all checks passed');
