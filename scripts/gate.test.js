@@ -658,4 +658,28 @@ assert.ok(Date.now() - fs.statSync(orchPath).mtimeMs < 60 * 1000,
 r = gate(dir, 'full');
 assert.strictEqual(r.status, 0, 'and the orchestrator is exempt again once the loop has proven itself alive');
 
+// 62. THE ONE THAT KILLED A HEALTHY SUITE. `pytest -q` over a thousand tests is about a kilobyte
+//     of dots — less than one buffer block — so piped rather than attached to a terminal it emits
+//     nothing until it exits. Silence-based hang detection then times out a suite that was working
+//     the entire time. A gate that never printed one byte must be told apart from one that spoke
+//     and then wedged, because the two have completely different fixes.
+const MUTE = `node -e "setTimeout(()=>process.exit(0), 4000)"`;
+dir = tmpRepo(JSON.stringify({ gates: { test: MUTE }, silence: { test: 1 } }));
+arm(dir);
+r = gate(dir, 'full');
+assert.ok(r.stderr.includes('NOTHING AT ALL'), 'a gate that never printed must be diagnosed as buffering, not as a hang');
+assert.ok(!r.stderr.includes("waiting on (an open handle"),
+  'and must NOT send anyone hunting an open handle that is not there');
+
+// 63. The diagnosis must stay narrow: a gate that spoke and THEN went quiet is a real hang, and
+//     still gets the real-hang advice. Blurring the two would trade one wrong answer for another.
+dir = tmpRepo(JSON.stringify({ gates: { test: STALL }, silence: { test: 1 } }));
+arm(dir);
+r = gate(dir, 'full');
+assert.ok(!r.stderr.includes('NOTHING AT ALL'), 'a gate that printed before wedging is not a buffering case');
+assert.ok(r.stderr.includes("waiting on (an open handle"), 'and it must still get the hunt-the-handle advice');
+
+// 64. Unverified is unverified: diagnosing the cause must never quietly turn a killed gate green.
+assert.ok(r.stderr.includes('UNVERIFIED'), 'a killed gate stays unverified whatever the explanation');
+
 console.log('gate.test.js: all checks passed');

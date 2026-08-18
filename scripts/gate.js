@@ -310,6 +310,13 @@ function run(cmd, { silenceSec, hardCapSec }) {
       shell: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: process.platform !== 'win32', // own process group, so killTree can take the workers
+      // Hang detection reads silence, which quietly assumes a tool talks while it works. Python
+      // does not: piped rather than attached to a terminal it block-buffers, so `pytest -q` over a
+      // thousand tests — barely a kilobyte of dots, less than one buffer — emits NOTHING until it
+      // exits. A perfectly healthy suite then looks identical to a wedged one, and gets killed the
+      // moment it outlives the budget. One variable turns the largest such offender back into a
+      // tool that streams; it costs nothing on every other stack, where it is simply ignored.
+      env: { ...process.env, PYTHONUNBUFFERED: '1' },
     });
 
     const chunks = [];
@@ -617,13 +624,29 @@ function hangAdvice(gate, result) {
   const why = result.stalled
     ? `printed nothing for ${silence[gate.key]}s and was killed — it is hung, not slow`
     : `exceeded the hard cap of ${hardCaps[gate.key]}s in .ristretto.json and was killed`;
-  return [
+  // A gate that produced not one byte from start to finish is a different animal from one that
+  // spoke and then stopped. Real hangs almost always say something first — a banner, a collection
+  // count, the first few tests — and then wedge. Total silence from the very beginning is the
+  // signature of a tool that buffers its output when it isn't attached to a terminal, and that
+  // gate was very likely working perfectly the whole time it was being timed out. Saying so is
+  // the difference between one config change and an afternoon hunting an open handle that isn't
+  // there. This is a diagnosis, never an exemption: unverified is still unverified.
+  const neverSpoke = result.stalled && !String(result.output || '').trim();
+  const lines = [
     `ristretto: gate '${gate.label}' ${why}.`,
     `  A hung gate is not a red gate — the work is UNVERIFIED, not proven broken.`,
-    `  Find what it's waiting on (an open handle, a port, watch mode, a prompt), or:`,
-    `  · scope the run — set "gates"."testChanged" to your runner's related-tests form, with {files}`,
-    `  · if the tool is simply quiet for long stretches, raise "silence"."${gate.key}" (now ${silence[gate.key]}s)`,
-  ].join('\n');
+  ];
+  if (neverSpoke) {
+    lines.push(`  It printed NOTHING AT ALL, start to finish — which is the shape of buffering, not of hanging.`);
+    lines.push(`  A tool that streams normally says something before it wedges. Check whether this one buffers`);
+    lines.push(`  when its output is piped (many do), and make it stream: an unbuffered flag, a progress reporter,`);
+    lines.push(`  a per-test format. Only then is a silence budget measuring what it thinks it is.`);
+  } else {
+    lines.push(`  Find what it's waiting on (an open handle, a port, watch mode, a prompt), or:`);
+  }
+  lines.push(`  · scope the run — set "gates"."testChanged" to your runner's related-tests form, with {files}`);
+  lines.push(`  · if the tool is simply quiet for long stretches, raise "silence"."${gate.key}" (now ${silence[gate.key]}s)`);
+  return lines.join('\n');
 }
 
 async function main() {

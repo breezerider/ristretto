@@ -64,7 +64,11 @@ Exit 0 → continue. Exit 1 → **the project's files are in an older shape than
 
    This is not a relaxation, it is the gate pointed at the right thing. You write no source; the subagents do, and each is gated on its own stop. Your turns end while a subagent is mid-edit — between "red tests written" and "implementation landed", or with a migration created but not yet applied — so gating them runs a suite against a tree that belongs to a half-finished cycle. It reports hundreds of failures that are nobody's defect, burns the retry budget saying so, and the only way out is to disarm the gates and improvise, which is exactly what must never be necessary. **Delete this marker when the loop ends**, alongside `.ristretto/pulling`.
 
-6. **One branch for the whole session.** Require a clean working tree — if dirty, stop and ask; never brew over uncommitted work. Create and switch to `feature/brew-<YYYY-MM-DD>` (reuse it if you're already on it). Every feature lands here as its own commit. Never push, never set an upstream.
+6. **One branch for the whole session.** Create and switch to `feature/brew-<YYYY-MM-DD>` (reuse it if you're already on it). Every feature lands here as its own commit. Never push, never set an upstream.
+
+   **A dirty tree is one of two things, and you can tell them apart without reading a diff.** If `.ristretto/build/<ID>.md` exists for a feature the roadmap still calls `planned`, the changes are a previous brew's own work, left behind when it died mid-feature — that is loop step 6's reconcile path, not a surprise. Resume that feature on the branch it was already on, and say so. It is the ordinary way an interrupted batch comes back, and it has already recovered a complete, green feature that would otherwise have been thrown away.
+
+   Only genuinely foreign changes — no build plan, no roadmap row expecting them — mean stop, because that is someone's unsaved work and brewing over it would be destructive. Say what you found and stop; that is not "asking a question", it is refusing to overwrite something you cannot account for.
 
 ## The loop
 
