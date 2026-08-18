@@ -46,11 +46,17 @@ const MODE = process.argv[2] || 'quick';
 const ARG = process.argv[3] || '';
 const MAX_RETRIES = 3;
 
-// Seconds a gate run will wait for the lock. The holder is self-limiting — its own silence
-// watchdog kills it, and the hook backstop is 3600s — so this ceiling sits just under that,
-// rather than at a number picked from how long one repo's suite happens to take. A repo whose
-// suite honestly runs forty minutes must never be told its gates could not be verified.
-const DEFAULT_LOCK_WAIT = 3300;
+// Seconds a gate run will wait for the lock. This ceiling is NOT about how long a suite takes.
+// It is about how long whatever started us can stay silent before something else kills it: an
+// agent that emits nothing for ~10 minutes is killed by the harness stall watchdog, and a killed
+// agent loses its result *entirely* — whoever dispatched it gets no answer at all, rather than a
+// failure it could act on. Waiting quietly past that point cannot help anyone, because there is
+// no longer anybody listening. So the wait ends, and says so, while someone is still alive to
+// hear it: reporting UNVERIFIED at eight minutes beats being killed at ten having said nothing.
+// (This was 3600-shaped once, reasoned from the hook backstop alone; the hook is not the only
+// thing with a patience limit, and it is not the shortest.) Raise `lockWait` deliberately on a
+// repo where gate runs legitimately queue for longer and nothing is watching the clock.
+const DEFAULT_LOCK_WAIT = 480;
 
 // A lock file older than this is stale whatever its pid says. Liveness alone is not enough:
 // pids get recycled, so a dead holder's number can come back as an unrelated process and the
@@ -80,6 +86,13 @@ const DEFAULT_HARD_CAP = { format: 30 };
 // paid again at every stop for the rest of the run. Measured, not guessed — a repo whose suite
 // is genuinely quick never sees the hint, whatever language it is written in.
 const SLOW_TEST_HINT_MS = 60 * 1000;
+
+// A *scoped* run this slow is a defect in the scoping, not a fact about the repo. The usual cause
+// is that the scoped command quietly dropped the parallelism the full gate has (`-n auto`, `-T`,
+// `--parallel`), which can make "only the files this feature touched" take longer than the entire
+// suite. Well under the ~600s an agent may go silent before it is killed, so this gets a chance to
+// be read rather than arriving after the run it was meant to save.
+const SLOW_SCOPED_HINT_MS = 5 * 60 * 1000;
 
 const POLL_MS = 1000;
 const MAX_CAPTURE = 2 * 1024 * 1024; // keep the tail of the output, not all of it
@@ -148,6 +161,7 @@ let holdsLock = false;
 // true if the lock is ours, false if we waited out `waitSec` without getting it.
 async function acquireLock(label) {
   const deadline = Date.now() + lockWait * 1000;
+  let announced = false;
   for (;;) {
     try {
       fs.mkdirSync(path.dirname(lockPath), { recursive: true });
@@ -169,6 +183,14 @@ async function acquireLock(label) {
         continue; // the holder died, or its pid was recycled by something unrelated — steal it
       }
       if (Date.now() >= deadline) return false;
+      // Say once, immediately, that we are queued rather than working. Silence here is the most
+      // expensive thing this script can do: whoever is waiting on us cannot tell a queue from a
+      // hang, and the usual response to an unexplained quiet minute is to start a second suite —
+      // exactly what the lock exists to prevent.
+      if (!announced) {
+        announced = true;
+        console.error(`ristretto: waiting for the gate lock — ${lockHolder()} is running. Up to ${lockWait}s.`);
+      }
       await sleep(POLL_MS);
     }
   }
@@ -648,6 +670,7 @@ async function main() {
 
     let failures = '';
     let unscopedTestMs = 0;
+    const slowScoped = [];
     for (const gate of gateList(true)) {
       const gateStartedAt = Date.now();
       const result = await run(gate.cmd, budget(gate));
@@ -656,6 +679,14 @@ async function main() {
         // instruction to add `testChanged` is easy to skip on a repo that already looks set up,
         // and this is the one place that knows, from measurement, that it was worth doing.
         if (gate.key === 'test' && !gates.testChanged) unscopedTestMs = Date.now() - gateStartedAt;
+        // And the mirror of it: a scoped gate is the fast path by definition, so one that runs
+        // this long is misconfigured. Nobody finds this by reading the config — it looks correct,
+        // and the only symptom is that the loop feels slow right up until something is killed for
+        // going quiet. Measurement is the only thing that can tell.
+        const scopedMs = Date.now() - gateStartedAt;
+        if (gate.key === 'testChanged' && scopedMs >= SLOW_SCOPED_HINT_MS) {
+          slowScoped.push({ label: gate.label, secs: Math.round(scopedMs / 1000) });
+        }
         continue;
       }
       if (result.stalled || result.hardCapped) {
@@ -675,6 +706,12 @@ async function main() {
         console.error('  Scope the loop to what each feature touches; the whole repo is still proven by `gate.js verify` at the end.');
         console.error('  One runner:  "testChanged": "<related-tests command> {files}"');
         console.error('  Several:     "testChanged": [{ "match": ["backend/**/*.py"], "cmd": "..." }, { "match": ["frontend/**"], "cmd": "..." }]');
+      }
+      for (const s of slowScoped) {
+        console.error(`ristretto: the scoped gate '${s.label}' took ${s.secs}s — that is the fast path, so something is wrong with it.`);
+        console.error('  Most often it dropped the parallelism the full "test" gate has: compare the two commands in .ristretto.json');
+        console.error('  and give the scoped one the same flags (-n auto, --parallel, -T, ...). A scoped run that is slower than the');
+        console.error('  whole suite is worse than no scoping at all. Otherwise the route is matching more than the feature touched.');
       }
       try { fs.unlinkSync(retriesPath); } catch { /* never existed */ }
       // Recompute — the gate commands themselves may have written artifacts.

@@ -558,4 +558,46 @@ assert.strictEqual(r.status, 0);
 assert.ok(!r.stderr.includes('will run again at every stop'), 'a configured repo must never see the hint');
 assert.strictEqual(trace(dir), 's', 'and it must be running the scoped gate, not the full one');
 
+
+
+// 53. A run that has to queue says so IMMEDIATELY, not only when it gives up. This is the whole
+//     lesson of the stall: an agent that emits nothing for ~10 minutes is killed, and a killed
+//     agent's result is lost entirely — so a silent wait costs far more than the wait itself.
+dir = tmpRepo(JSON.stringify({ gates: { test: COUNT }, lockWait: 1 }));
+arm(dir);
+fs.mkdirSync(path.join(dir, '.ristretto'), { recursive: true });
+fs.writeFileSync(lockDir(dir), JSON.stringify({ pid: process.pid, label: 'a full suite', at: Date.now() }));
+r = gate(dir, 'full');
+assert.ok(r.stderr.includes('waiting for the gate lock'),
+  'a queued run must announce the wait, not sit silent until the deadline');
+assert.ok(r.stderr.includes('a full suite'), 'and name what it is waiting on');
+assert.strictEqual(runs(dir), 0, 'announcing must not mean running');
+
+// 54. The default wait is a CEILING, not a preference: it exists to end before the caller is
+//     killed for going quiet. A future edit that raises it past the stall watchdog would restore
+//     exactly the failure this replaced — a subagent killed mid-wait, its work stranded unproven.
+const gateSrc = fs.readFileSync(path.join(__dirname, 'gate.js'), 'utf8');
+const declared = /const DEFAULT_LOCK_WAIT = (\d+);/.exec(gateSrc);
+assert.ok(declared, 'DEFAULT_LOCK_WAIT must stay a plain literal this check can read');
+assert.ok(Number(declared[1]) <= 600,
+  `DEFAULT_LOCK_WAIT is ${declared[1]}s — it must stay under the ~600s agent stall watchdog`);
+// 55. The scoped-gate hint must stay rare: a scoped run that is actually fast says nothing. A hint
+//     that fires on every loop is a hint nobody reads by the third feature.
+dir = gitTmpRepo(JSON.stringify({ gates: { test: FULL, testChanged: SCOPED } }));
+arm(dir);
+fs.writeFileSync(path.join(dir, 'src.txt'), 'touched');
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 0);
+assert.ok(!r.stderr.includes('that is the fast path'), 'a fast scoped gate must not be flagged as slow');
+
+// 56. And its threshold is a ceiling for the same reason the lock's is: it exists to be read by
+//     whoever is still alive. Past the stall watchdog the advice arrives after the run it would
+//     have saved. (The firing path itself is not exercised here — it needs a five-minute gate.)
+const scopedHint = /const SLOW_SCOPED_HINT_MS = ([^;]+);/.exec(gateSrc);
+assert.ok(scopedHint, 'SLOW_SCOPED_HINT_MS must stay a plain literal this check can read');
+assert.ok(eval(scopedHint[1]) <= 600 * 1000,
+  'SLOW_SCOPED_HINT_MS must stay under the ~600s agent stall watchdog');
+assert.ok(/gate\.key === 'testChanged' && scopedMs >= SLOW_SCOPED_HINT_MS/.test(gateSrc),
+  'the hint must stay wired to the scoped gate — an unwired hint is silently never emitted');
+
 console.log('gate.test.js: all checks passed');

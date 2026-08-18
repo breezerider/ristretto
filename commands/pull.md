@@ -101,13 +101,15 @@ The plugin ships deterministic gate hooks: while a pull is active, a Stop hook r
    | vitest | `npx vitest related --run {files}` |
    | jest | `npx jest --findRelatedTests {files} --passWithNoTests` |
    | karma / Angular | `npx ng test --watch=false --include {files}` |
-   | pytest | `python -m pytest {files}` |
+   | pytest | `python -m pytest {files}` *(carry over `-n auto` if the full gate has it — see below)* |
    | flutter / dart | `flutter test {files}` |
    | go | `go test ./...` *(usually fast enough — leave empty and let `test` run)* |
    | gradle | `./gradlew test --tests {files}` *(or leave empty; Gradle's own up-to-date checks already skip unaffected work)* |
    | maven | *(no reliable per-file selection — leave empty and rely on `test`)* |
    | dotnet | `dotnet test --filter FullyQualifiedName~{files}` *(needs class names, not paths — often better left empty)* |
    | rust | `cargo test` *(incremental by default — leave empty)* |
+
+   **Give the scoped command every speed flag the full one has.** This is the mistake that looks most like correct config and hurts most: a `test` gate of `pytest -n auto` beside a `testChanged` of `pytest {files}` runs the *whole repo* on all cores and the *few files this feature touched* on one. Past a certain size that inverts — the scoped run becomes slower than the full suite it was added to avoid, and because it is the fast path nobody thinks to time it. The only symptom is a loop that feels slow, until a run goes quiet long enough to be killed. Carry the flags across, whatever they are: `-n auto` (pytest-xdist), `--maxWorkers` (jest), `--parallel` (Gradle), `--` thread settings for vitest. Then time it once: a scoped run should be seconds, not minutes. The gate runner will tell you if it isn't.
 
    **Leave it empty whenever the runner can't scope honestly.** A `testChanged` that maps paths to the wrong tests is worse than no scoping at all: it reports green while proving nothing, and the loop is built on trusting that green. Maven, and any runner that selects by fully-qualified class name rather than file path, are exactly this case — an empty `testChanged` just falls back to the full `test` gate, which is always correct and sometimes slow. Slow is recoverable; a dishonest green is not.
 
@@ -130,7 +132,7 @@ The plugin ships deterministic gate hooks: while a pull is active, a Stop hook r
    Three optional keys tune the runner, all in seconds:
    - **`silence`** — how long a gate may print *nothing* before it's killed as hung. Defaults: `lint` 600, `typecheck` 600, `test`/`testChanged` 300. Raise it for a tool that's quiet by nature.
    - **`timeouts`** — a hard cap on total runtime. **Off by default, and usually should stay off**: a slow gate is not a broken gate, and a cap kills a working suite at an arbitrary number.
-   - **`lockWait`** — how long a gate run waits for the repo-wide gate lock before giving up (default 900). Only one gate run executes at a time: two suites sharing a database, a port, or a fixture produce failures that belong to neither, and a red you can't trust is worse than no red at all. A run that waits this out reports *unverified* and never blocks. Raise it on a repo whose suite legitimately runs longer than 15 minutes.
+   - **`lockWait`** — how long a gate run waits for the repo-wide gate lock before giving up (default 480). Only one gate run executes at a time: two suites sharing a database, a port, or a fixture produce failures that belong to neither, and a red you can't trust is worse than no red at all. A run that waits this out reports the work *unverified* — never green, never red — and asks to be run again, bounded by the retry budget. The default is deliberately shorter than it sounds: an agent that goes quiet for about ten minutes is killed, and a killed agent's result is lost entirely, so a wait that outlasts its own caller helps nobody. Raise it only on a repo where gate runs legitimately queue for longer and nothing is waiting on the result.
 
    A gate judged hung is **surfaced immediately, never retried** — retrying a hang just hangs again — and the work is reported *unverified*, which is neither green nor red.
 
