@@ -57,6 +57,10 @@ The plugin ships deterministic gate hooks: while a pull is active, a Stop hook r
    | `formatPaths` | a `format` gate is set | an unscoped formatter rewrites documentation and generated files, and each fix re-triggers it |
    | `silence` / `timeouts` / `lockWait` | only when a default is actually wrong for this repo | leave them alone otherwise; the defaults are per gate kind and hold across stacks |
 
+   **Then check the `testChanged` you already have, not just whether it exists.** A scoped command that dropped a flag the full `test` gate carries is the one misconfiguration that costs more than having no scoping at all, and it is invisible: both commands look right on their own, and only running them side by side shows that the fast path is the slow one. Run the gates once and the runner names any gap out loud (`the scoped gate '...' is missing a flag its full "test" gate has: -n auto`) — it compares the two commands structurally, so it catches flags nobody has heard of yet.
+
+   When it names one, **fix `.ristretto.json` yourself and say so in your summary.** This file is the plugin's own bookkeeping and completing it is what this step is for — the user should not have to hand-edit JSON to stop a loop from stalling. Copy the flag across unless dropping it was plainly deliberate (`--coverage` on a scoped run is fine to leave out; anything that changes how many cores the runner uses is not).
+
    Adding a missing key is a **migration, not a preference** — do it without asking. Changing a command the user already wrote is the opposite: leave it alone and mention it instead.
 
    ```json

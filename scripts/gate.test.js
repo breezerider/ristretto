@@ -600,4 +600,37 @@ assert.ok(eval(scopedHint[1]) <= 600 * 1000,
 assert.ok(/gate\.key === 'testChanged' && scopedMs >= SLOW_SCOPED_HINT_MS/.test(gateSrc),
   'the hint must stay wired to the scoped gate — an unwired hint is silently never emitted');
 
+// 57. THE ONE THAT WOULD HAVE SAVED THE RUN. A scoped route that dropped a flag its full `test`
+//     gate carries is named before anything slow happens — structurally, without knowing what the
+//     flag means. Nothing about this config looks wrong to a reader; only the two commands side by
+//     side show that the fast path lost the parallelism the slow one has.
+const POLY = {
+  test: 'cd backend && pytest -q -n auto && cd .. && cd frontend && npm run test',
+  testChanged: [
+    { name: 'backend', match: ['backend/**/*.py'], cmd: 'pytest -q {files}' },
+    { name: 'frontend', match: ['frontend/**'], cmd: 'cd frontend && npm run test' },
+  ],
+};
+dir = gitTmpRepo(JSON.stringify({ gates: POLY }));
+arm(dir);
+r = gate(dir, 'verify');
+assert.ok(r.stderr.includes("missing a flag its full \"test\" gate has: -n auto"),
+  'the dropped flag must be named exactly, at pre-flight, before a single subagent runs');
+assert.ok(r.stderr.includes('backend'), 'and it must say WHICH route dropped it');
+
+// 58. And it must not cry wolf on the polyglot case it was written for: the frontend route shares
+//     `npm run test` with the same chained gate, and the backend's flags are not its to carry.
+//     A check that flags every well-configured multi-stack repo would be turned off within a day.
+assert.ok(!/changed: frontend'\) is missing|changed: frontend' is missing/.test(r.stderr),
+  'a route matching a different segment of the chain must not inherit the other stack\'s flags');
+
+// 59. Once the flag is carried across, the runner goes quiet — the signal has to clear, or it
+//     becomes background noise nobody reads.
+const FIXED = JSON.parse(JSON.stringify(POLY));
+FIXED.testChanged[0].cmd = 'pytest -q -n auto {files}';
+dir = gitTmpRepo(JSON.stringify({ gates: FIXED }));
+arm(dir);
+r = gate(dir, 'verify');
+assert.ok(!r.stderr.includes('missing a flag'), 'a corrected config must produce no advice at all');
+
 console.log('gate.test.js: all checks passed');

@@ -30,7 +30,7 @@ Exit 0 → continue. Exit 1 → **the project's files are in an older shape than
    ```
 
    plus one short barista quip, and — if features exist but all are blocked — a line naming what's blocked and why. If any row is `needs-human` with unticked boxes, name those too, separately: they aren't waiting on refinement, they're waiting on you to run or look at something.
-3. **Pre-flight — the repo must already be green.** Create `.ristretto.json` if missing, exactly as in `pull` step 3 — and if the suite is slower than a minute, **set `testChanged`**, which is what keeps the loop's per-subagent gate from re-running the whole suite dozens of times. Then prove the tree once, before arming anything:
+3. **Pre-flight — the repo must already be green.** Work `.ristretto.json` exactly as in `pull` step 3: create it if missing, complete it if it predates a key, and — if the suite is slower than a minute — **set `testChanged`**, which is what keeps the loop's per-subagent gate from re-running the whole suite dozens of times. An existing config is not a finished one; a `testChanged` that quietly dropped a flag the full `test` gate carries makes the loop's fast path slower than the suite it replaced, and the pre-flight below is where that gets named. Fix it here, before the loop — this is the last moment it costs nothing. Then prove the tree once, before arming anything:
 
    ```
    node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.js" verify cached

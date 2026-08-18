@@ -409,6 +409,75 @@ const matchesAny = (file, globs) =>
 // tests". Anything matching NO entry falls back to the FULL suite: an unrecognised path might be
 // the one that breaks everything, and a green that skipped it would be a lie. That fallback is
 // announced, because a silently-full suite looks like the scoping simply isn't working.
+// --- Flags a scoped route dropped from the full test gate. ---
+// This deliberately knows nothing about what any flag *means*. `-n auto`, `--parallel`, `-T`,
+// `--maxWorkers`, and whatever the next runner invents are all just tokens here. The signal is
+// structural: the same runner was configured twice, and the copy that is supposed to be the fast
+// path lost something the slow one has. A table of known parallelism flags would cover the five
+// stacks someone thought of; this covers the ones nobody has written yet.
+//
+// Compared segment by segment, because a multi-stack `test` gate is a chain — matching a frontend
+// route against a backend runner's flags would report a gap in every well-configured polyglot repo.
+const segments = (cmd) => cmd.split(/&&|\|\||;/).map((s) => s.trim()).filter(Boolean);
+const words = (seg) => seg.split(/\s+/).filter(Boolean);
+const isFlag = (w) => /^-/.test(w);
+const plain = (seg) => new Set(words(seg).filter((w) => !isFlag(w) && !/[{}]/.test(w)));
+
+function droppedFlags(fullCmd, scopedCmd) {
+  if (!fullCmd || !scopedCmd) return [];
+  const missing = [];
+  for (const scopedSeg of segments(scopedCmd)) {
+    const scopedWords = words(scopedSeg);
+    if (!scopedWords.length) continue;
+    // The same runner means: invoked the same way, and recognisably the same command. One shared
+    // token is `cd`; two or more is a real match.
+    const match = segments(fullCmd).find((fullSeg) => {
+      const fullWords = words(fullSeg);
+      if (!fullWords.length || fullWords[0] !== scopedWords[0]) return false;
+      const shared = [...plain(scopedSeg)].filter((w) => plain(fullSeg).has(w));
+      // Two shared names is a confident match. One is enough only when one is all there is —
+      // `pytest -q {files}` names its program and nothing else, and demanding corroboration it
+      // cannot supply would blind this to the plainest configs of all.
+      return shared.length >= 2 || (shared.length >= 1 && plain(scopedSeg).size === 1);
+    });
+    if (!match) continue;
+    const have = new Set(words(scopedSeg).filter(isFlag));
+    const fullWords = words(match);
+    fullWords.forEach((w, i) => {
+      if (!isFlag(w) || have.has(w)) return;
+      const value = fullWords[i + 1];
+      missing.push(value && !isFlag(value) && !/[{}]/.test(value) ? `${w} ${value}` : w);
+    });
+  }
+  return missing;
+}
+
+// Every scoped route, checked without running anything. `verify` is the pre-flight — the one moment
+// a whole batch is still cheap to fix — but it runs the full suite by definition and so would never
+// touch the scoped commands. Reporting a gap only once the loop is already dispatching subagents is
+// reporting it to nobody: that output lands in a subagent's hook, not in front of the orchestrator.
+function auditScopedGates() {
+  const spec = gates.testChanged;
+  if (typeof spec === 'string') return reportDroppedFlags('test (changed)', spec);
+  if (!Array.isArray(spec)) return;
+  for (const entry of spec) {
+    if (!entry || typeof entry.cmd !== 'string' || !entry.cmd) continue;
+    reportDroppedFlags(`test (changed: ${entry.name || firstToken(entry.cmd) || 'changed'})`, entry.cmd);
+  }
+}
+
+const gapReported = new Set();
+function reportDroppedFlags(label, cmd) {
+  const missing = droppedFlags(gates.test, cmd);
+  if (!missing.length || gapReported.has(label)) return;
+  gapReported.add(label);
+  console.error(`ristretto: the scoped gate '${label}' is missing a flag its full "test" gate has: ${missing.join(', ')}`);
+  console.error('  Same runner, configured twice — and the copy that lost something is the one meant to be fast.');
+  console.error('  A scoped run without the full run\'s parallelism can take longer than testing the whole repo,');
+  console.error('  which looks like nothing at all in the config and only shows up as a loop that drags.');
+  console.error('  Add it to "testChanged" in .ristretto.json, or accept this line as the price of leaving it out.');
+}
+
 function testGates(scoped) {
   const spec = scoped ? gates.testChanged : null;
   const full = gates.test ? [{ key: 'test', label: 'test', cmd: gates.test }] : [];
@@ -417,6 +486,7 @@ function testGates(scoped) {
 
   // Single-command form.
   if (typeof spec === 'string') {
+    reportDroppedFlags('test (changed)', spec);
     if (!spec.includes('{files}')) return [{ key: 'testChanged', label: 'test (changed)', cmd: spec }];
     const files = changedFiles();
     if (!files.length) return []; // nothing touched → nothing to scope a run to
@@ -437,6 +507,7 @@ function testGates(scoped) {
     mine.forEach((f) => claimed.add(f));
     if (!entry.cmd) continue; // claimed, deliberately untested
     const name = entry.name || firstToken(entry.cmd) || 'changed';
+    reportDroppedFlags(`test (changed: ${name})`, entry.cmd);
     list.push({
       key: 'testChanged',
       label: `test (changed: ${name})`,
@@ -546,6 +617,9 @@ async function main() {
   }
 
   if (MODE === 'verify') {
+    // Before the cache short-circuit: a config gap is true whether or not this tree was proven
+    // already, and the cached path is exactly when a resumed batch would otherwise never hear it.
+    auditScopedGates();
     // A pre-flight repeated on an unchanged tree proves nothing the first one didn't. `cached`
     // is how brew asks for that verdict instead of re-paying for it after a session restart.
     if (CACHED) {
