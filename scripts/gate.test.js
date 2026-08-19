@@ -966,4 +966,25 @@ assert.strictEqual(r.status, 2);
 assert.ok(!/pre-existing|NEW test failure/.test(r.stderr),
   'attribution must not speak in a repo that did not ask for it');
 
+
+// 86. THE ONE THAT WOULD LIE. A report left behind by a previous run describes a run that is
+//     over. If this run's command dies before writing one, reading yesterday's file would call
+//     the tree green on the strength of results nobody produced.
+dir = tmpRepo(JSON.stringify({
+  gates: { test: `node -e "process.exit(1)"`, testReport: '.ristretto/report.xml' },
+}));
+arm(dir);
+fs.writeFileSync(path.join(dir, '.ristretto', 'report.xml'),
+  '<testsuites><testsuite><testcase classname="a" name="1"/></testsuite></testsuites>');
+setBaseline(dir, []);
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 2, 'a stale green report must not rescue a failing run');
+assert.ok(!fs.existsSync(path.join(dir, '.ristretto', 'report.xml')),
+  'the stale report must have been deleted before the gate ran');
+
+// 87. And when no report appears at all, the gate says so and falls back to the exit code rather
+//     than inventing a verdict from a file that is not there.
+assert.ok(/no test report/i.test(r.stderr),
+  `the fallback must be stated, not silent — got: ${r.stderr.slice(0, 300)}`);
+
 console.log('gate.test.js: all checks passed');
