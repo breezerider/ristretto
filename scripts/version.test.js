@@ -85,4 +85,18 @@ assert.ok(r.stderr.includes('nothing to stamp'), 'and say so');
 //    patches change behaviour, never what is written to disk.
 assert.ok(/^\d+\.\d+$/.test(CURRENT), 'the format version must be MAJOR.MINOR, with no patch component');
 
+
+// A project stamped 0.13 must be told to migrate, because 0.14 adds a .ristretto.json key the
+// commands now look for. Asserted against CURRENT rather than a literal "0.14", so this keeps
+// testing the right thing after the next bump instead of becoming a chore.
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ristretto-version-'));
+  fs.mkdirSync(path.join(dir, 'docs', 'ristretto'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'docs', 'ristretto', 'roadmap.md'),
+    '# Roadmap\n<!-- ristretto-format: 0.13 -->\n');
+  const r = run(dir, 'check');
+  assert.strictEqual(r.status, 1, 'a 0.13 project must be migrated once the plugin is past 0.13');
+  assert.ok(r.stdout.includes('0.13') && r.stdout.includes(CURRENT), 'both versions must be named');
+}
+
 console.log('version.test.js: all checks passed');

@@ -36,6 +36,27 @@ Each block is cumulative — an unstamped project gets all of them, in order. Do
    - A `[human]` criterion with no matching line in `manual-checks.md` needs one. Add it with `?` for the "what to do" and flag it — you know a person must do something, not what.
 5. **`.ristretto.json`:** add `testChanged` and `formatPaths` if absent, exactly as `pull` step 3 describes. Never change a command the user already wrote.
 
+### → 0.14 — tests are compared, not just counted
+
+Nothing on disk changes shape. This block exists to tell the user about one new capability, once,
+rather than leaving it in a README they will never open.
+
+Say this:
+
+```
+☕ ristretto 0.14 can tell NEW test failures from ones that were already there — which
+  means brew no longer needs a fully green suite to run. Failures already present when a
+  feature starts are tolerated and counted; only new ones block, and the set can never grow.
+  It needs your test command to write a machine-readable report. Want me to set that up?
+```
+
+**If they say yes, find out how — do not write a flag from memory.** Follow `pull` step 3's
+discovery: read what the repo already does, try it, probe the result, and write `testReport` only
+once a report has actually parsed. **If it cannot be made to work, write nothing** and say what it
+would take. A `testReport` naming a file that never appears makes every gate report a missing
+report, forever. This is a shape migration; adding a config key that does not work is a change in
+meaning, and worse than leaving the feature off.
+
 **Also, for a project that predates `## Contract` entirely:**
 
 6. Plans with no `## Contract` section: move `Acceptance:` under a new `## Contract`, and add `Provides:`, `Consumes:`, `Decisions:`, `Units:`, `Manual-Checks:` as `—` where unknown. **Leave them `—`.** Filling them in is `prep`'s job with the user present — inventing a `Provides:` here would poison every dependent feature's planner, which reads it as fact.

@@ -139,6 +139,28 @@ The plugin ships deterministic gate hooks: while a pull is active, a Stop hook r
 
    **Prefer the `{files}` forms over a runner's own change detection.** `vitest --changed`, `jest -o` and friends read git's diff, which does not include untracked files — and a brand-new test file is exactly what red-first produces, so the tests that prove this feature would be the ones skipped. Leave `testChanged` as `""` when the suite is already quick; the loop then runs the full gate as it always did.
 
+   **`testReport` — let the gate tell your breakage from breakage that was already there.** Point it at a machine-readable report your test command writes, and the gate stops asking "is the suite green" and starts asking "did this change break anything". Failures already present when the feature started are tolerated and counted; a failure that is new blocks, and the message names only the new ones. This is what lets ristretto work in a repo whose suite is not fully green — which it previously refused outright, so one unrelated broken test locked it out of the whole repository.
+
+   ```json
+   "test":       "pytest -q -n auto --junitxml=.ristretto/report.xml",
+   "testReport": ".ristretto/report.xml"
+   ```
+
+   Routes carry their own: `{ "match": [...], "cmd": "...", "report": ".ristretto/rb.xml" }`. JUnit XML is read, and so is Dart/Flutter's own JSON reporter — which has no junit option at all. If your runner emits machine-readable results in some other shape, that is a reader worth adding to the plugin rather than a converter worth installing in your repo.
+
+   **Work out the reporter from THIS project — never write one from memory.** Whatever you believe about a runner's flags may be wrong, out of date, or right for a version this repo is not on. And a `testReport` naming a file that never appears makes every gate announce a missing report, forever. So find out:
+
+   1. **Read what the repo already does.** A CI workflow that uploads test results has solved this exact problem for this exact runner, and its flag is known to work here. `.github/workflows/`, `CLAUDE.md` / `AGENTS.md`, `package.json` scripts, `pyproject.toml` — the answer is usually already written down.
+   2. **Run it**, against a small subset if the suite is slow.
+   3. **Probe it:** `node "${CLAUDE_PLUGIN_ROOT}/scripts/testreport.js" --probe <the path>`. Exit 0 means the file exists and parses as something the gate can actually use.
+   4. **Only then** write `test` / `testReport` into `.ristretto.json`.
+
+   **If you cannot get a report, write nothing and say so.** Several runners need a package installed first — `jest-junit`, `rspec_junit_formatter`, `JunitXml.TestLogger`, `cargo2junit` — and installing one is the user's call, not yours. Name what it would take and move on. Gates then behave exactly as they always have, which is a perfectly good outcome. A `testReport` that does not work is strictly worse than none.
+
+   **The tolerated set can only ever shrink.** A test that starts passing leaves it and cannot return without blocking; an unattended run can never add to it. If a feature legitimately makes an old test wrong, that is a decision for a person — the feature goes `blocked` and you refine it. Tests *permanently* expected to fail belong in the suite as `skip`/`xfail`, where every developer benefits, not in this config where only ristretto would know.
+
+   Leave `testReport` out and everything behaves exactly as it always has.
+
    Four optional keys tune the runner, all in seconds:
    - **`silence`** — how long a gate may print *nothing* before it's killed as hung. Defaults: `lint` 600, `typecheck` 600, `test`/`testChanged` 300. Raise it for a tool that's quiet by nature.
 
