@@ -1016,4 +1016,67 @@ r = gate(dir, 'verify');
 assert.strictEqual(r.status, 0);
 assert.ok(/1 pre-existing/.test(r.stdout + r.stderr), 'a tolerant green must still name its debt');
 
+
+// 91. Each route reports on its own run. A backend route must never be judged against the
+//     frontend's results, and a route with no report of its own falls back to its exit code
+//     without disturbing the route beside it.
+//     NOTE: deliberately no commit in this fixture. With no HEAD, treeFingerprint() returns null
+//     and the green-tree cache stays off — which is what lets 92 actually run the gates instead
+//     of being short-circuited by 91's green result on an identical tree.
+dir = tmpRepo(JSON.stringify({
+  gates: {
+    test: PASS,
+    testChanged: [
+      { name: 'be', match: ['be/**'], cmd: 'node reporter.js "be::1" "be::1"', report: '.ristretto/report.xml' },
+      { name: 'fe', match: ['fe/**'], cmd: PASS },
+    ],
+  },
+}));
+fs.writeFileSync(path.join(dir, 'reporter.js'), REPORTER_SRC);
+arm(dir);
+fs.mkdirSync(path.join(dir, 'be'), { recursive: true });
+fs.mkdirSync(path.join(dir, 'fe'), { recursive: true });
+fs.writeFileSync(path.join(dir, 'be', 'x.py'), 'x');
+fs.writeFileSync(path.join(dir, 'fe', 'x.ts'), 'x');
+// Only be/ and fe/ may look like changed files here: anything else is unrouted, and an unrouted
+// path correctly falls back to the FULL suite — which would prove nothing about routing.
+fs.writeFileSync(path.join(dir, '.gitignore'), '.ristretto/\nreporter.js\n.gitignore\n.ristretto.json\n');
+spawnSync('git', ['init', '-q', dir], { encoding: 'utf8' });
+spawnSync('git', ['-C', dir, 'config', 'user.email', 't@t'], { encoding: 'utf8' });
+spawnSync('git', ['-C', dir, 'config', 'user.name', 't'], { encoding: 'utf8' });
+setBaseline(dir, ['be::1']);
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 0, 'the backend failure is tolerated and the frontend route is green');
+assert.ok(/1 pre-existing/.test(r.stderr));
+
+// 92. And scoping changes WHAT runs, never whether attribution is enforced: a failure that is
+//     new inside the handful of tests a route executed still blocks.
+setBaseline(dir, []);
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 2, 'a new failure in a scoped route blocks like any other');
+assert.ok(r.stderr.includes('be::1'), 'and names the test that is new');
+
+
+// 93. The single-command scoped form carries the report too. A repo with one runner and one
+//     `testChanged` string would otherwise lose attribution the moment the loop scoped itself —
+//     silently, and only on the fast path, which is the hardest place to notice anything.
+dir = tmpRepo(JSON.stringify({
+  gates: {
+    test: PASS,
+    testChanged: 'node reporter.js "s::1" "s::1"',
+    testReport: '.ristretto/report.xml',
+  },
+}));
+fs.writeFileSync(path.join(dir, 'reporter.js'), REPORTER_SRC);
+fs.writeFileSync(path.join(dir, '.gitignore'), '.ristretto/\nreporter.js\n.gitignore\n.ristretto.json\n');
+fs.writeFileSync(path.join(dir, 'src.js'), 'x');
+spawnSync('git', ['init', '-q', dir], { encoding: 'utf8' });
+spawnSync('git', ['-C', dir, 'config', 'user.email', 't@t'], { encoding: 'utf8' });
+spawnSync('git', ['-C', dir, 'config', 'user.name', 't'], { encoding: 'utf8' });
+arm(dir);
+setBaseline(dir, ['s::1']);
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 0, 'a scoped single-command gate must attribute like any other');
+assert.ok(/1 pre-existing/.test(r.stderr));
+
 console.log('gate.test.js: all checks passed');

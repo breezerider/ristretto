@@ -566,10 +566,11 @@ function testGates(scoped) {
   // Single-command form.
   if (typeof spec === 'string') {
     reportDroppedFlags('test (changed)', spec);
-    if (!spec.includes('{files}')) return [{ key: 'testChanged', label: 'test (changed)', cmd: spec }];
+    const reports = reportList(gates.testReport);
+    if (!spec.includes('{files}')) return [{ key: 'testChanged', label: 'test (changed)', cmd: spec, reports }];
     const files = changedFiles();
     if (!files.length) return []; // nothing touched → nothing to scope a run to
-    return [{ key: 'testChanged', label: 'test (changed)', cmd: spec.replace('{files}', quote(files)) }];
+    return [{ key: 'testChanged', label: 'test (changed)', cmd: spec.replace('{files}', quote(files)), reports }];
   }
 
   if (!Array.isArray(spec)) return full; // malformed → prove everything rather than nothing
@@ -591,6 +592,10 @@ function testGates(scoped) {
       key: 'testChanged',
       label: `test (changed: ${name})`,
       cmd: entry.cmd.includes('{files}') ? entry.cmd.replace('{files}', quote(mine)) : entry.cmd,
+      // Each route is judged against its own results. A backend route must never be compared with
+      // the frontend's report, and a route with none falls back to its exit code without
+      // disturbing the route beside it.
+      reports: reportList(entry.report),
     });
   }
 
