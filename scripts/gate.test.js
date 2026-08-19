@@ -718,4 +718,149 @@ gate(dir, 'full');
 assert.ok(!fs.existsSync(path.join(dir, '.ristretto', 'gate-quiet.json')),
   'a killed gate must record nothing — only green runs are evidence');
 
+
+// --- The {file} contract. ---
+// formatPaths matches repo-relative paths and {files} substitutes repo-relative paths, so {file}
+// substituting an ABSOLUTE one made a single config file speak two path languages. Every command
+// that composed with it — the `cd sub && fmt ../{file}` a monorepo naturally writes — silently
+// formatted nothing, forever, because quick mode discards what it cannot block on.
+
+// 68. {file} is repo-relative, like everything else a config author writes.
+dir = tmpRepo();
+fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
+fs.writeFileSync(path.join(dir, 'src', 'a.ts'), 'x\n');
+fs.writeFileSync(path.join(dir, '.ristretto.json'), JSON.stringify({
+  gates: { format: 'node -e "require(\'fs\').appendFileSync(\'got.txt\', process.argv[1])" {file}' },
+}));
+gate(dir, 'quick', JSON.stringify({ tool_input: { file_path: path.join(dir, 'src', 'a.ts') } }));
+assert.strictEqual(fs.readFileSync(path.join(dir, 'got.txt'), 'utf8').trim(), 'src/a.ts',
+  '{file} must arrive repo-relative, with forward slashes');
+
+// --- A formatter that fails every time must say so. ---
+// "Never block" was implemented as "never report", so a format gate that was broken on every
+// single edit produced not one byte of evidence. Non-blocking is a promise about exit 2, not a
+// reason to swallow the output.
+
+// 69. A failing format gate is surfaced — without blocking (never exit 2).
+dir = tmpRepo(JSON.stringify({ gates: { format: FAIL } }));
+fs.writeFileSync(path.join(dir, 'a.ts'), 'x\n');
+const fmtHook = JSON.stringify({ tool_input: { file_path: path.join(dir, 'a.ts') } });
+r = gate(dir, 'quick', fmtHook);
+assert.notStrictEqual(r.status, 2, 'the format gate must never block');
+assert.notStrictEqual(r.status, 0, 'but a formatter that failed must not pass silently either');
+assert.ok(/format/i.test(r.stderr), 'and it must name the format gate');
+
+// 70. Once, not on every keystroke. The same failure again is already on the record.
+r = gate(dir, 'quick', fmtHook);
+assert.strictEqual(r.status, 0, 'the same format failure must not be reported twice');
+assert.ok(!/format/i.test(r.stderr), 'and must stay quiet the second time');
+
+// 71. A formatter that starts working clears the record, so a LATER regression is reported again.
+fs.writeFileSync(path.join(dir, '.ristretto.json'), JSON.stringify({ gates: { format: PASS } }));
+gate(dir, 'quick', fmtHook);
+fs.writeFileSync(path.join(dir, '.ristretto.json'), JSON.stringify({ gates: { format: FAIL } }));
+r = gate(dir, 'quick', fmtHook);
+assert.notStrictEqual(r.status, 0, 'a formatter that breaks again must be reported again');
+
+// --- The calibration bootstrap. ---
+// Budgets could only ever widen from a GREEN run, so a tool whose first run is killed for
+// buffering never recorded anything and was killed identically forever. The measurement that was
+// meant to replace a per-tool table could only ever help tools that never needed it. Python
+// escaped it via a hardcoded PYTHONUNBUFFERED; no other stack had a way out.
+// Silent for 3s, then succeeds: healthy, just buffered.
+const QUIET_PASS = 'node -e "setTimeout(()=>{console.log(\'42 passed\'); process.exit(0)}, 3000)"';
+
+// 72. A gate killed having printed NOTHING widens its own rope for next time, and then passes.
+dir = tmpRepo(JSON.stringify({ gates: { test: QUIET_PASS }, silence: { test: 2 } }));
+arm(dir);
+r = gate(dir, 'full');
+assert.ok(/printed nothing/.test(r.stderr), 'run 1 is killed, as before');
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 0, 'run 2 must survive — a buffering tool has to be able to prove itself');
+assert.ok(!/printed nothing/.test(r.stderr), 'and must not be killed again for the same silence');
+
+// 73. A gate that SPOKE and then wedged is a real hang: it earns no rope at all.
+dir = tmpRepo(JSON.stringify({ gates: { test: STALL }, silence: { test: 1 } }));
+arm(dir);
+gate(dir, 'full');
+let quietAfterStall = {};
+try { quietAfterStall = JSON.parse(fs.readFileSync(path.join(dir, ".ristretto", "gate-quiet.json"), "utf8")); } catch { /* none */ }
+assert.ok(!Object.keys(quietAfterStall).some((k) => k.startsWith('test')),
+  'a gate that spoke before wedging must never teach the runner to tolerate it');
+
+// 74. And the rope is bounded — no history of buffering may make a genuine hang unkillable.
+assert.ok(/QUIET_CEILING_MS/.test(gateSrc2()),
+  'the widened budget must still be capped by the ceiling');
+
+// --- Which binary is this gate actually going to run? ---
+// resolveGateTools read Object.values(gates), so it fed itself formatPaths (an array of globs)
+// and testChanged (an array of objects, stringified to "[object Object]"). Every real command
+// that began with `cd` resolved to the shell builtin. The drift detector recorded three pieces
+// of junk and not one tool — inert on exactly the polyglot configs the docs recommend.
+
+// 75. Only real gate commands, and the program behind a `cd` prefix — never a glob or an object.
+dir = tmpRepo(JSON.stringify({
+  gates: {
+    test: 'cd . && ' + PASS,
+    formatPaths: ['frontend/**/*.{ts,tsx}'],
+    testChanged: [{ match: ['x/**'], cmd: PASS }],
+  },
+}));
+gate(dir, 'verify');
+const tools = JSON.parse(fs.readFileSync(path.join(dir, '.ristretto', 'gate-tools.json'), 'utf8'));
+assert.ok('node' in tools, 'the real program behind a `cd` prefix must be resolved');
+assert.ok(!('cd' in tools), '`cd` is a shell builtin, not a toolchain');
+assert.ok(!Object.keys(tools).some((k) => k.includes('[object') || k.includes('*')),
+  'globs and route objects are not commands and must never be probed as tools');
+
+// 76. A green run clears the stall marker. Left behind, it says a gate is hung long after one is.
+dir = tmpRepo(JSON.stringify({ gates: { test: HANG }, silence: { test: 1 } }));
+arm(dir);
+gate(dir, 'full');
+assert.ok(fs.existsSync(path.join(dir, '.ristretto', 'gate-stalled')), 'a hang is recorded');
+fs.writeFileSync(path.join(dir, '.ristretto.json'), JSON.stringify({ gates: { test: PASS } }));
+gate(dir, 'full');
+assert.ok(!fs.existsSync(path.join(dir, '.ristretto', 'gate-stalled')),
+  'and a green run must clear it — stale state that says "hung" is a lie with no expiry');
+
+// --- The lock wait and the agent's silence budget are the same budget. ---
+// The agent that triggered this hook is killed after ~10 minutes of silence, and a killed agent
+// loses its result ENTIRELY — whoever dispatched it gets no answer at all. A queue wait that
+// ignores how long the run itself takes spends that budget twice: 8 minutes waiting plus a
+// 6-minute suite is a subagent that dies having said nothing, and a feature blocked for a reason
+// that was never about the feature.
+
+// 77. The wait is cut to the room the watchdog has left, not the configured ceiling.
+dir = tmpRepo(JSON.stringify({ gates: { test: PASS }, lockWait: 3600, watchdog: 65 }));
+arm(dir);
+fs.mkdirSync(path.join(dir, '.ristretto'), { recursive: true });
+fs.writeFileSync(path.join(dir, '.ristretto', 'gate-lock'),
+  JSON.stringify({ pid: process.pid, label: 'someone else', at: Date.now() }));
+r = gate(dir, 'full');
+assert.ok(/Up to 5s/.test(r.stderr),
+  'the wait must shrink to what the watchdog has left, not the configured 3600s — got: ' + r.stderr.slice(0, 300));
+
+// 78. A run that eats most of that budget says so, while someone is still alive to read it.
+dir = tmpRepo(JSON.stringify({ gates: { test: SLOW }, watchdog: 4 }));
+arm(dir);
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 0, 'a slow gate still passes on its own terms');
+assert.ok(/watchdog|silence budget|killed for going quiet/i.test(r.stderr),
+  'a run this close to the agent\'s own limit must be named — got: ' + r.stderr.slice(0, 300));
+
+
+// 79. The hang report must quote the budget the gate was ACTUALLY killed at, not the configured
+//     one. Calibration and probation both widen it, so quoting the config would tell someone to
+//     raise a number that is already being ignored in their favour — and would understate, every
+//     time, exactly how much rope the tool has already been given.
+dir = tmpRepo(JSON.stringify({ gates: { test: HANG }, silence: { test: 1 } }));
+arm(dir);
+r = gate(dir, 'full');
+assert.ok(r.stderr.includes('printed nothing for 1s'), 'the first kill is at the configured budget');
+r = gate(dir, 'full');
+assert.ok(r.stderr.includes('printed nothing for 2s'),
+  'the second kill is at the widened budget, and must say so — got: ' + r.stderr.slice(0, 200));
+assert.ok(r.stderr.includes('(now 2s)'),
+  'and the advice must offer to raise the budget from where it actually stands');
+
 console.log('gate.test.js: all checks passed');

@@ -58,6 +58,27 @@ const MAX_RETRIES = 3;
 // repo where gate runs legitimately queue for longer and nothing is watching the clock.
 const DEFAULT_LOCK_WAIT = 480;
 
+// How long the agent that triggered this hook may stay silent before its own harness kills it.
+// This is the budget the whole run is spending, and it is spent by two things that never knew
+// about each other: the wait for the lock, and the gate run itself. Eight minutes of queue plus a
+// six-minute suite is fourteen minutes of a subagent saying nothing — dead at ten, its result
+// gone, and a feature blocked for a reason that was never about the feature. So the wait is sized
+// against what the run is measured to cost, not set to a ceiling picked in isolation.
+const DEFAULT_WATCHDOG = 600;
+
+// Kept back from the wait for the run that follows it. A wait that consumed every remaining
+// second would guarantee the run itself starts with nothing left.
+const LOCK_SLACK = 60;
+
+// Never wait zero — a lock conflict is transient, and giving up instantly would report UNVERIFIED
+// on a run that was a second away from starting. This floor only ever binds when the last run
+// already ate the budget, which is itself the thing worth reporting.
+const MIN_LOCK_WAIT = 5;
+
+// A single run past this share of the watchdog is close enough to name. Below it the margin is
+// real; above it, one slow day is the difference between a result and a killed agent.
+const WATCHDOG_WARN_SHARE = 0.5;
+
 // A lock file older than this is stale whatever its pid says. Liveness alone is not enough:
 // pids get recycled, so a dead holder's number can come back as an unrelated process and the
 // lock would look held forever. Nothing can legitimately hold it this long — the hook backstop
@@ -118,6 +139,7 @@ const greenPath = path.join(projectDir, '.ristretto', 'gate-green');
 const stalledPath = path.join(projectDir, '.ristretto', 'gate-stalled');
 const toolsPath = path.join(projectDir, '.ristretto', 'gate-tools.json');
 const lockPath = path.join(projectDir, '.ristretto', 'gate-lock');
+const formatBrokenPath = path.join(projectDir, '.ristretto', 'format-broken');
 const orchestratingPath = path.join(projectDir, '.ristretto', 'orchestrating');
 
 // No config → ristretto not set up in this repo → never interfere.
@@ -137,12 +159,14 @@ let gates = {};
 let silence = DEFAULT_SILENCE;
 let hardCaps = DEFAULT_HARD_CAP;
 let lockWait = DEFAULT_LOCK_WAIT;
+let watchdog = DEFAULT_WATCHDOG;
 try {
   const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   gates = config.gates || {};
   silence = { ...DEFAULT_SILENCE, ...(config.silence || {}) };
   hardCaps = { ...DEFAULT_HARD_CAP, ...(config.timeouts || {}) };
   if (Number.isFinite(config.lockWait)) lockWait = config.lockWait;
+  if (Number.isFinite(config.watchdog)) watchdog = config.watchdog;
 } catch (e) {
   if (MODE === 'verify') {
     console.error(`ristretto: .ristretto.json is unparseable (${e.message}) — fix it, the gate cannot run.`);
@@ -171,9 +195,26 @@ function alive(pid) {
 
 let holdsLock = false;
 
-// true if the lock is ours, false if we waited out `waitSec` without getting it.
+// How long this run may queue before it has to report UNVERIFIED instead. `lockWait` is a ceiling,
+// not a plan: what actually decides is how much of the agent's silence budget the run that follows
+// is going to need. That is measured, not guessed — the last full pass recorded what it cost — so
+// a repo whose suite grows into the watchdog automatically stops queueing for eight minutes on top
+// of it.
+let waitSec = lockWait;
+function effectiveLockWait() {
+  const lastRunMs = observedQuiet[RUN_TOTAL_KEY];
+  // Bounded by the watchdog even with nothing measured yet: the run still has to happen after the
+  // wait, so spending the whole budget queueing is wrong on the first run too. A measured run only
+  // tightens it further.
+  const lastRunSec = Number.isFinite(lastRunMs) ? Math.round(lastRunMs / 1000) : 0;
+  const room = watchdog - lastRunSec - LOCK_SLACK;
+  return Math.max(MIN_LOCK_WAIT, Math.min(lockWait, room));
+}
+
+// true if the lock is ours, false if we waited it out without getting it.
 async function acquireLock(label) {
-  const deadline = Date.now() + lockWait * 1000;
+  waitSec = effectiveLockWait();
+  const deadline = Date.now() + waitSec * 1000;
   let announced = false;
   for (;;) {
     try {
@@ -209,7 +250,7 @@ async function acquireLock(label) {
       // exactly what the lock exists to prevent.
       if (!announced) {
         announced = true;
-        console.error(`ristretto: waiting for the gate lock — ${lockHolder()} is running. Up to ${lockWait}s.`);
+        console.error(`ristretto: waiting for the gate lock — ${lockHolder()} is running. Up to ${waitSec}s.`);
       }
       await sleep(POLL_MS);
     }
@@ -581,9 +622,19 @@ function gateList(scoped) {
 //
 // This can only ever widen a budget, never narrow one, so it cannot introduce a kill that would
 // not have happened anyway — and the ceiling keeps a genuine hang from becoming unkillable.
+// The hole this had for a long time: evidence could only come from a GREEN run, and a tool that
+// buffers is killed before it can ever produce one. Its budget therefore never moved, and it was
+// killed identically on every run forever — the one shape of tool that most needs a wider rope was
+// the one shape that could never earn it. Python escaped only because PYTHONUNBUFFERED is set for
+// every gate above; nothing else had a way out, which is exactly the per-stack table this was
+// written to avoid. So a kill is evidence too, but only the kind that says "buffering": a gate
+// that printed NOTHING AT ALL, start to finish. That one widens on probation and tries again.
+// A gate that spoke and then went quiet is a real hang and earns nothing.
 const QUIET_SLACK = 2;                      // observed silences vary run to run; leave real room
 const QUIET_FLOOR_MS = 60 * 1000;           // absolute slack, so a chatty gate still tolerates a pause
 const QUIET_CEILING_MS = 30 * 60 * 1000;    // beyond this it is a hang, whatever it has done before
+const PROBATION = ':probation';             // a rope earned by being killed, not by passing
+const RUN_TOTAL_KEY = 'run:total';          // what the last full pass cost, in ms
 const quietPath = path.join(projectDir, '.ristretto', 'gate-quiet.json');
 let lastRunMaxQuietMs = 0;
 
@@ -609,8 +660,75 @@ const budget = (gate) => {
     const widenedMs = Math.min(observed * QUIET_SLACK + QUIET_FLOOR_MS, QUIET_CEILING_MS);
     silenceSec = Math.max(configuredSec, Math.round(widenedMs / 1000));
   }
+  const probationMs = observedQuiet[gate.key + PROBATION];
+  if (configuredSec && Number.isFinite(probationMs)) {
+    silenceSec = Math.max(silenceSec, Math.round(Math.min(probationMs, QUIET_CEILING_MS) / 1000));
+  }
   return { silenceSec, hardCapSec: hardCaps[gate.key] };
 };
+
+// The format gate's own record, so a standing failure is reported once rather than per keystroke.
+// Keyed by the command and the failure, so a changed config or a changed error speaks up again.
+function reportFormat(result) {
+  let last = null;
+  try { last = fs.readFileSync(formatBrokenPath, 'utf8'); } catch { /* nothing on record */ }
+  if (result === null) {
+    // Working again. Forget the old failure so a later regression is reported rather than muffled
+    // by a note about the last one.
+    if (last !== null) { try { fs.unlinkSync(formatBrokenPath); } catch { /* already gone */ } }
+    return;
+  }
+  const why = result.stalled ? 'went quiet and was killed'
+    : result.hardCapped ? 'hit its hard cap and was killed'
+    : String(result.output || '').trim().split('\n').slice(-3).join('\n');
+  const signature = `${gates.format}\n${why}`;
+  if (last === signature) return; // already said, and nothing has changed since
+  try {
+    fs.mkdirSync(path.dirname(formatBrokenPath), { recursive: true });
+    fs.writeFileSync(formatBrokenPath, signature);
+  } catch { /* best-effort — worst case it is reported twice */ }
+  console.error(`ristretto: the "format" gate failed — nothing was formatted, and this is not blocking your work.`);
+  console.error(`  command: ${gates.format}`);
+  console.error(`  ${why.split('\n').join('\n  ')}`);
+  console.error('  A format gate that fails once usually fails every time, so this is said once and then dropped');
+  console.error('  until it changes. `{file}` is substituted repo-relative, and the command runs from the repo root.');
+  process.exit(1); // non-zero, but never 2: reported to you, never blocking the agent
+}
+
+// What a full pass costs, recorded so the next one can size its queue wait against it, and named
+// out loud once it is eating the budget its caller needs to stay alive. Measured rather than
+// configured: a suite grows a test at a time, and the run that finally crosses the line looks
+// exactly like the hundred before it.
+function reportRunCost(ms) {
+  if (!Number.isFinite(ms)) return;
+  observedQuiet[RUN_TOTAL_KEY] = ms;
+  try {
+    fs.mkdirSync(path.dirname(quietPath), { recursive: true });
+    fs.writeFileSync(quietPath, JSON.stringify(observedQuiet));
+  } catch { /* best-effort */ }
+  if (ms < watchdog * WATCHDOG_WARN_SHARE * 1000) return;
+  const secs = Math.round(ms / 1000);
+  console.error(`ristretto: these gates took ${secs}s, against a ~${watchdog}s silence budget for the agent waiting on them.`);
+  console.error('  Nothing failed. But an agent that says nothing for that long is killed by its own harness, and a');
+  console.error('  killed agent loses its result entirely — the work is stranded unproven and the feature blocks for a');
+  console.error('  reason that was never about the feature. Scope the loop with "gates"."testChanged" so each stop');
+  console.error('  proves only what the feature touched, and leave the whole repo to `gate.js verify` at the end.');
+}
+
+// A gate killed without producing one byte gets a wider rope for next time. Doubling only — the
+// budget it was just killed at is the only evidence there is, and a floor here would hand a gate
+// configured to be impatient a minute it never asked for. Ceilinged, so no amount of buffering can
+// make a genuine hang unkillable: at the ceiling it is reported as a hang and stays reported.
+function widenOnProbation(key, usedSec) {
+  if (!key) return;
+  const nextMs = Math.min(usedSec * 2000, QUIET_CEILING_MS);
+  if (observedQuiet[key + PROBATION] === nextMs) return;
+  observedQuiet[key + PROBATION] = nextMs;
+  try {
+    fs.mkdirSync(path.dirname(quietPath), { recursive: true });
+    fs.writeFileSync(quietPath, JSON.stringify(observedQuiet));
+  } catch { /* calibration is an optimisation, never a requirement */ }
+}
 
 // --- Which binary is this gate actually going to run? ---
 // A pre-flight run by the agent and a gate run by the hook inherit different environments. If
@@ -640,13 +758,40 @@ function resolveTool(tok) {
   }
 }
 
+// Shell builtins that begin a command without being the program it runs. `cd sub && real-tool`
+// is the most common command shape in a monorepo, and taking its first word recorded the builtin
+// and never the toolchain — the drift detector then compared nothing against nothing, forever.
+const NOT_A_TOOL = new Set(['cd', 'set', 'export', 'source', '.', 'exec', 'env', 'call', 'pushd', 'popd']);
+
+// Every gate command that is actually a command. `gates` also holds `formatPaths` (an array of
+// globs) and `testChanged` (which may be an array of route objects); stringifying those and taking
+// the first word is how a glob and the literal text "[object" ended up recorded as toolchains.
+function gateCommands() {
+  const out = [];
+  for (const key of ['format', 'lint', 'typecheck', 'test']) {
+    if (typeof gates[key] === 'string' && gates[key]) out.push(gates[key]);
+  }
+  const spec = gates.testChanged;
+  if (typeof spec === 'string' && spec) out.push(spec);
+  else if (Array.isArray(spec)) {
+    for (const entry of spec) {
+      if (entry && typeof entry.cmd === 'string' && entry.cmd) out.push(entry.cmd);
+    }
+  }
+  return out;
+}
+
 // { flutter: "/usr/bin/flutter", npx: "/usr/local/bin/npx" } for every configured gate command.
+// Every segment of every command, because a chained gate runs more than one program and any of
+// them can be the one that resolves differently under the hook.
 function resolveGateTools() {
   const tools = {};
-  for (const cmd of Object.values(gates)) {
-    if (!cmd) continue;
-    const tok = firstToken(cmd);
-    if (tok && !(tok in tools)) tools[tok] = resolveTool(tok);
+  for (const cmd of gateCommands()) {
+    for (const seg of segments(cmd)) {
+      const tok = firstToken(seg);
+      if (!tok || NOT_A_TOOL.has(tok) || tok in tools) continue;
+      tools[tok] = resolveTool(tok);
+    }
   }
   return tools;
 }
@@ -667,9 +812,18 @@ function toolDrift(now) {
   return drift;
 }
 
-function hangAdvice(gate, result) {
+// A gate that produced not one byte from start to finish is a different animal from one that
+// spoke and then stopped: total silence from the very beginning is the signature of a tool that
+// buffers when it isn't attached to a terminal, not of one that wedged. This is the only kill
+// that counts as evidence about the tool's rhythm.
+const buffered = (result) => Boolean(result.stalled) && !String(result.output || '').trim();
+
+// `usedSec` is the budget this run was actually killed at, which is not always the configured one:
+// calibration and probation both widen it. Quoting the config instead would tell someone to raise
+// a number that is already being ignored in their favour.
+function hangAdvice(gate, result, usedSec) {
   const why = result.stalled
-    ? `printed nothing for ${silence[gate.key]}s and was killed — it is hung, not slow`
+    ? `printed nothing for ${usedSec}s and was killed — it is hung, not slow`
     : `exceeded the hard cap of ${hardCaps[gate.key]}s in .ristretto.json and was killed`;
   // A gate that produced not one byte from start to finish is a different animal from one that
   // spoke and then stopped. Real hangs almost always say something first — a banner, a collection
@@ -678,7 +832,7 @@ function hangAdvice(gate, result) {
   // gate was very likely working perfectly the whole time it was being timed out. Saying so is
   // the difference between one config change and an afternoon hunting an open handle that isn't
   // there. This is a diagnosis, never an exemption: unverified is still unverified.
-  const neverSpoke = result.stalled && !String(result.output || '').trim();
+  const neverSpoke = buffered(result);
   const lines = [
     `ristretto: gate '${gate.label}' ${why}.`,
     `  A hung gate is not a red gate — the work is UNVERIFIED, not proven broken.`,
@@ -692,7 +846,7 @@ function hangAdvice(gate, result) {
     lines.push(`  Find what it's waiting on (an open handle, a port, watch mode, a prompt), or:`);
   }
   lines.push(`  · scope the run — set "gates"."testChanged" to your runner's related-tests form, with {files}`);
-  lines.push(`  · if the tool is simply quiet for long stretches, raise "silence"."${gate.key}" (now ${silence[gate.key]}s)`);
+  lines.push(`  · if the tool is simply quiet for long stretches, raise "silence"."${gate.key}" (now ${usedSec}s)`);
   return lines.join('\n');
 }
 
@@ -700,8 +854,17 @@ async function main() {
   if (MODE === 'quick') {
     const file = hook.tool_input && hook.tool_input.file_path;
     if (gates.format && file && fs.existsSync(file) && formatAllowed(file)) {
-      // convenience only — never block, stay quiet
-      await run(gates.format.replace('{file}', `"${file}"`), budget({ key: 'format' }));
+      // Repo-relative, like `formatPaths` matches and like `{files}` substitutes. One config file
+      // must not speak two path languages: an absolute path here silently broke every command that
+      // composed with it — `cd sub && fmt ../{file}`, the shape a monorepo naturally writes.
+      const rel = path.relative(projectDir, file).split(path.sep).join('/');
+      const result = await run(gates.format.replace('{file}', `"${rel}"`), budget({ key: 'format' }));
+      // Never block — this is a convenience, and exit 2 would stop an agent over whitespace. But
+      // "never block" was read as "never report", and a formatter that failed on every single edit
+      // produced no evidence at all, for months. Say it once: the first time, and again only when
+      // the failure changes or comes back after a run that worked. A formatter is either working
+      // or it isn't, so one line is the whole story and a line per keystroke is noise.
+      reportFormat(result);
     }
     process.exit(0);
   }
@@ -731,15 +894,17 @@ async function main() {
 
     // Full scope, no cache, no marker required. Green here is the real proof.
     if (!(await acquireLock('verify'))) {
-      console.error(`ristretto: could not start — ${lockHolder()} still holds the gate lock after ${lockWait}s.`);
+      console.error(`ristretto: could not start — ${lockHolder()} still holds the gate lock after ${waitSec}s.`);
       console.error('  The tree is UNVERIFIED, not red. Let that run finish, then verify again.');
       process.exit(1);
     }
+    const passStartedAt = Date.now();
     const results = [];
     let failures = '';
     let hung = false;
     for (const gate of gateList(false)) {
-      const result = await run(gate.cmd, budget(gate));
+      const used = budget(gate);
+      const result = await run(gate.cmd, used);
       if (result === null) {
         recordQuiet(gate.key, lastRunMaxQuietMs);
         results.push(`${gate.label} ✓`);
@@ -748,7 +913,8 @@ async function main() {
       results.push(`${gate.label} ✗`);
       if (result.stalled || result.hardCapped) {
         hung = true;
-        failures += `\n${hangAdvice(gate, result)}`;
+        if (buffered(result)) widenOnProbation(gate.key, used.silenceSec);
+        failures += `\n${hangAdvice(gate, result, used.silenceSec)}`;
       } else {
         failures += `\n--- ristretto gate '${gate.label}' FAILED ---\n${result.output.split('\n').slice(-40).join('\n')}`;
       }
@@ -768,8 +934,10 @@ async function main() {
       console.error(failures);
       process.exit(1);
     }
+    reportRunCost(Date.now() - passStartedAt);
     // A clean verify is the strongest green there is — seed the cache with it.
     if (!hung) {
+      try { fs.unlinkSync(stalledPath); } catch { /* never existed */ }
       const green = treeFingerprint();
       if (green !== null) {
         try { fs.mkdirSync(path.dirname(greenPath), { recursive: true }); fs.writeFileSync(greenPath, green); } catch { /* best-effort */ }
@@ -834,7 +1002,7 @@ async function main() {
         console.error(`ristretto: could not get the gate lock after ${MAX_RETRIES} attempts — ${held} appears wedged. Surfacing instead of looping; the work is UNVERIFIED.`);
         process.exit(0);
       }
-      console.error(`ristretto: the gates could not run — ${held} still holds the gate lock after ${lockWait}s.`);
+      console.error(`ristretto: the gates could not run — ${held} still holds the gate lock after ${waitSec}s.`);
       console.error('  Nothing is wrong with your work: two suites at once invent failures that belong to neither run,');
       console.error('  so ristretto waits rather than report a red it cannot trust. This stop is UNVERIFIED, not green.');
       console.error('  Wait for that run to finish and run the gates again. Do not start a second suite yourself.');
@@ -850,12 +1018,14 @@ async function main() {
     const drift = toolDrift(resolveGateTools());
     const driftNote = drift.length ? `\n${drift.join('\n')}\n` : '';
 
+    const passStartedAt = Date.now();
     let failures = '';
     let unscopedTestMs = 0;
     const slowScoped = [];
     for (const gate of gateList(true)) {
       const gateStartedAt = Date.now();
-      const result = await run(gate.cmd, budget(gate));
+      const used = budget(gate);
+      const result = await run(gate.cmd, used);
       if (result === null) {
         // Green: whatever silence this gate showed was healthy silence. That is the calibration.
         recordQuiet(gate.key, lastRunMaxQuietMs);
@@ -876,8 +1046,9 @@ async function main() {
       if (result.stalled || result.hardCapped) {
         // Surface immediately. Blocking here would send the agent back to a gate that hangs
         // again, burning the whole retry budget on the same wall — the exact wedge this avoids.
+        if (buffered(result)) widenOnProbation(gate.key, used.silenceSec);
         try { fs.mkdirSync(path.dirname(stalledPath), { recursive: true }); fs.writeFileSync(stalledPath, gate.label); } catch { /* best-effort */ }
-        console.error(driftNote + hangAdvice(gate, result));
+        console.error(driftNote + hangAdvice(gate, result, used.silenceSec));
         process.exit(0);
       }
       failures += `\n--- ristretto gate '${gate.label}' FAILED ---\n${result.output.split('\n').slice(-40).join('\n')}`;
@@ -898,6 +1069,10 @@ async function main() {
         console.error('  whole suite is worse than no scoping at all. Otherwise the route is matching more than the feature touched.');
       }
       try { fs.unlinkSync(retriesPath); } catch { /* never existed */ }
+      // Nothing is hung any more. A marker left from an older run keeps saying one is, with no
+      // expiry and nothing to contradict it — state that lies is worse than state that is missing.
+      try { fs.unlinkSync(stalledPath); } catch { /* never existed */ }
+      reportRunCost(Date.now() - passStartedAt);
       // Recompute — the gate commands themselves may have written artifacts.
       const green = treeFingerprint();
       if (green !== null) {
