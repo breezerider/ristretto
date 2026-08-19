@@ -863,4 +863,107 @@ assert.ok(r.stderr.includes('printed nothing for 2s'),
 assert.ok(r.stderr.includes('(now 2s)'),
   'and the advice must offer to raise the budget from where it actually stands');
 
+
+// --- Attribution: which failures are NEW. ---
+// A gate produces one bit, and one bit cannot say whose fault a failure is. Given the report the
+// runner already writes, it can: failures this change introduced block, failures that were
+// already there are tolerated and counted. Configure nothing and none of this speaks.
+
+// A stand-in test runner. Writes a JUnit report naming the ids it was given, fails the ones it
+// was told to fail, and exits accordingly — a real runner in every way that matters here.
+const REPORTER_SRC = `
+const fs = require('fs');
+const ids = (process.argv[2] || '').split(',').filter(Boolean);
+const bad = new Set((process.argv[3] || '').split(',').filter(Boolean));
+const cases = ids.map((id) => {
+  const [c, n] = id.split('::');
+  return bad.has(id)
+    ? '<testcase classname="' + c + '" name="' + n + '"><failure message="x">boom</failure></testcase>'
+    : '<testcase classname="' + c + '" name="' + n + '"/>';
+}).join('');
+fs.mkdirSync('.ristretto', { recursive: true });
+fs.writeFileSync('.ristretto/report.xml', '<testsuites><testsuite>' + cases + '</testsuite></testsuites>');
+process.exit(bad.size ? 1 : 0);
+`;
+
+function reporterRepo(ids, fails, gatesExtra) {
+  const d = tmpRepo(JSON.stringify({
+    gates: Object.assign({
+      test: `node reporter.js "${ids.join(',')}" "${fails.join(',')}"`,
+      testReport: '.ristretto/report.xml',
+    }, gatesExtra || {}),
+  }));
+  fs.writeFileSync(path.join(d, 'reporter.js'), REPORTER_SRC);
+  return d;
+}
+
+function setBaseline(d, ids) {
+  fs.mkdirSync(path.join(d, '.ristretto'), { recursive: true });
+  fs.writeFileSync(path.join(d, '.ristretto', 'baseline.json'),
+    JSON.stringify({ capturedAt: 1, head: null, failing: ids }));
+}
+
+const readBaseline = (d) =>
+  JSON.parse(fs.readFileSync(path.join(d, '.ristretto', 'baseline.json'), 'utf8')).failing;
+
+// 80. A pre-existing failure is tolerated: the gate passes despite a non-zero exit code, and says
+//     how many it is carrying.
+dir = reporterRepo(['a::1', 'a::2'], ['a::1']);
+arm(dir);
+setBaseline(dir, ['a::1']);
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 0, 'a failure that was already there must not block');
+assert.ok(/1 pre-existing/.test(r.stderr), `the tolerated count must be stated — got: ${r.stderr.slice(0, 300)}`);
+
+// 81. A NEW failure blocks, and the message names only the new one. Naming all of them is the
+//     same as naming none: the whole value is knowing which failure is yours.
+dir = reporterRepo(['a::1', 'a::2'], ['a::1', 'a::2']);
+arm(dir);
+setBaseline(dir, ['a::1']);
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 2, 'a new failure still blocks');
+assert.ok(r.stderr.includes('a::2'), 'the new failure must be named');
+assert.ok(!/^\s+a::1$/m.test(r.stderr), 'the pre-existing one must be counted, never blamed');
+
+// 82. THE RATCHET, end to end. A baseline failure that now passes leaves the file on disk.
+dir = reporterRepo(['a::1', 'a::2'], []);
+arm(dir);
+setBaseline(dir, ['a::1']);
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 0);
+assert.deepStrictEqual(readBaseline(dir), [],
+  'a fixed test must leave the tolerated set and never be allowed back in silently');
+
+// 83. THE EXIT-5 CASE. A runner reporting "nothing ran" with a non-zero exit is not a red tree.
+//     pytest returns 5 when the changed files contained no tests, which blocked agents on a suite
+//     that never executed and sent them hunting a broken test that did not exist.
+dir = tmpRepo(JSON.stringify({
+  gates: { test: 'node reporter.js', testReport: '.ristretto/report.xml' },
+}));
+fs.writeFileSync(path.join(dir, 'reporter.js'),
+  "const fs=require('fs');fs.mkdirSync('.ristretto',{recursive:true});" +
+  "fs.writeFileSync('.ristretto/report.xml','<testsuites><testsuite tests=\"0\"/></testsuites>');" +
+  'process.exit(5);');
+arm(dir);
+setBaseline(dir, []);
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 0, 'no tests ran and none failed — that is not a failing gate');
+
+// 84. With NO baseline on disk a hook treats every failure as new, and must not create one.
+//     Capture is a deliberate act that belongs to verify.
+dir = reporterRepo(['a::1'], ['a::1']);
+arm(dir);
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 2, 'no baseline means nothing is tolerated');
+assert.ok(!fs.existsSync(path.join(dir, '.ristretto', 'baseline.json')),
+  'and a hook must never create one');
+
+// 85. Unconfigured repos are untouched: no testReport, no attribution, the exit code decides.
+dir = tmpRepo(JSON.stringify({ gates: { test: FAIL } }));
+arm(dir);
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 2);
+assert.ok(!/pre-existing|NEW test failure/.test(r.stderr),
+  'attribution must not speak in a repo that did not ask for it');
+
 console.log('gate.test.js: all checks passed');

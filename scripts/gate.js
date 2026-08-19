@@ -41,6 +41,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn, spawnSync, execSync } = require('child_process');
+const { readReport } = require('./junit');
+const { ratchet, load: loadBaseline, save: saveBaseline } = require('./baseline');
 
 const MODE = process.argv[2] || 'quick';
 const ARG = process.argv[3] || '';
@@ -140,6 +142,7 @@ const stalledPath = path.join(projectDir, '.ristretto', 'gate-stalled');
 const toolsPath = path.join(projectDir, '.ristretto', 'gate-tools.json');
 const lockPath = path.join(projectDir, '.ristretto', 'gate-lock');
 const formatBrokenPath = path.join(projectDir, '.ristretto', 'format-broken');
+const baselinePath = path.join(projectDir, '.ristretto', 'baseline.json');
 const orchestratingPath = path.join(projectDir, '.ristretto', 'orchestrating');
 
 // No config → ristretto not set up in this repo → never interfere.
@@ -556,7 +559,7 @@ function reportDroppedFlags(label, cmd) {
 
 function testGates(scoped) {
   const spec = scoped ? gates.testChanged : null;
-  const full = gates.test ? [{ key: 'test', label: 'test', cmd: gates.test }] : [];
+  const full = gates.test ? [{ key: 'test', label: 'test', cmd: gates.test, reports: reportList(gates.testReport) }] : [];
 
   if (!spec || (Array.isArray(spec) && !spec.length)) return full;
 
@@ -666,6 +669,58 @@ const budget = (gate) => {
   }
   return { silenceSec, hardCapSec: hardCaps[gate.key] };
 };
+
+// A gate may write more than one report — a `test` gate chaining a backend and a frontend runner
+// produces two, and both describe the same run.
+function reportList(spec) {
+  if (typeof spec === 'string' && spec) return [spec];
+  if (Array.isArray(spec)) return spec.filter((p) => typeof p === 'string' && p);
+  return [];
+}
+
+// What this gate run says about WHOSE failures these are. null when this gate has no usable
+// report, which means the caller falls back to the exit code exactly as before.
+//
+// Called for EVERY run, green or red — not only failing ones. A run where everything passed is
+// exactly how a previously-failing test leaves the tolerated set, and skipping attribution on
+// green would make the ratchet one-way in the wrong direction: able to grow, never to shrink.
+function attribute(gate) {
+  const paths = gate.reports || [];
+  if (!paths.length) return null;
+  const executed = new Set();
+  const failing = new Set();
+  let readAny = false;
+  for (const rel of paths) {
+    const report = readReport(path.join(projectDir, rel));
+    if (!report) continue;
+    readAny = true;
+    for (const id of report.executed) executed.add(id);
+    for (const id of report.failing) failing.add(id);
+  }
+  if (!readAny) {
+    console.error(`ristretto: no test report at ${paths.join(', ')} — falling back to the exit code for '${gate.label}'.`);
+    console.error('  Nothing was attributed this run. Check the command still writes the report it is configured to.');
+    return null;
+  }
+  const baseline = loadBaseline(baselinePath) || new Set();
+  const { newFailures, tolerated, next } = ratchet({ baseline, executed, failing });
+  return { verdict: newFailures.length ? 'block' : 'pass', newFailures, tolerated, next };
+}
+
+// Only the NEW failures are named. Naming all of them is the same as naming none — the whole
+// value of a compared gate is knowing which failure is yours.
+function attributionLines(a) {
+  const lines = [];
+  if (a.newFailures.length) {
+    lines.push(`ristretto: ${a.newFailures.length} NEW test failure(s) — these were not failing before this change:`);
+    for (const id of a.newFailures.slice(0, 25)) lines.push(`  ${id}`);
+    if (a.newFailures.length > 25) lines.push(`  (+${a.newFailures.length - 25} more)`);
+  }
+  if (a.tolerated.length) {
+    lines.push(`  (${a.tolerated.length} pre-existing failure(s) tolerated — already failing when this feature started)`);
+  }
+  return lines.join('\n');
+}
 
 // The format gate's own record, so a standing failure is reported once rather than per keystroke.
 // Keyed by the command and the failure, so a changed config or a changed error speaks up again.
@@ -1025,14 +1080,34 @@ async function main() {
     for (const gate of gateList(true)) {
       const gateStartedAt = Date.now();
       const used = budget(gate);
+      for (const rel of gate.reports || []) {
+        try { fs.unlinkSync(path.join(projectDir, rel)); } catch { /* nothing to clear */ }
+      }
       const result = await run(gate.cmd, used);
-      if (result === null) {
+
+      // Attribution runs whether or not the command exited 0. On a green run it is what lets a
+      // previously-failing test LEAVE the tolerated set; skipping it there would make the ratchet
+      // able to grow and never shrink, which is the wrong way round.
+      const attributed = attribute(gate);
+      const attributedPass = Boolean(attributed) && attributed.verdict === 'pass';
+      // A hook must never CREATE a baseline — that is a deliberate act, and `verify` owns it. It
+      // may update one that is already there.
+      if (attributedPass && loadBaseline(baselinePath) !== null) {
+        saveBaseline(baselinePath, attributed.next, git('rev-parse HEAD'));
+      }
+      if (attributed && (attributed.newFailures.length || attributed.tolerated.length)) {
+        console.error(attributionLines(attributed));
+      }
+      // The report is the verdict once there is one: a non-zero exit with no NEW failures is a
+      // suite that is red for reasons this change did not cause, and a zero exit with new
+      // failures in the report still blocks. The results outrank the exit code either way.
+      if (attributed ? attributedPass : result === null) {
         // Green: whatever silence this gate showed was healthy silence. That is the calibration.
-        recordQuiet(gate.key, lastRunMaxQuietMs);
+        if (result === null) recordQuiet(gate.key, lastRunMaxQuietMs);
         // A full suite ran because nothing scoped it. Remember how long that cost — the config
         // instruction to add `testChanged` is easy to skip on a repo that already looks set up,
         // and this is the one place that knows, from measurement, that it was worth doing.
-        if (gate.key === 'test' && !gates.testChanged) unscopedTestMs = Date.now() - gateStartedAt;
+        if (result === null && gate.key === 'test' && !gates.testChanged) unscopedTestMs = Date.now() - gateStartedAt;
         // And the mirror of it: a scoped gate is the fast path by definition, so one that runs
         // this long is misconfigured. Nobody finds this by reading the config — it looks correct,
         // and the only symptom is that the loop feels slow right up until something is killed for
@@ -1043,7 +1118,8 @@ async function main() {
         }
         continue;
       }
-      if (result.stalled || result.hardCapped) {
+      // `result` is null here only when a green command was overruled by its own report.
+      if (result && (result.stalled || result.hardCapped)) {
         // Surface immediately. Blocking here would send the agent back to a gate that hangs
         // again, burning the whole retry budget on the same wall — the exact wedge this avoids.
         if (buffered(result)) widenOnProbation(gate.key, used.silenceSec);
@@ -1051,7 +1127,9 @@ async function main() {
         console.error(driftNote + hangAdvice(gate, result, used.silenceSec));
         process.exit(0);
       }
-      failures += `\n--- ristretto gate '${gate.label}' FAILED ---\n${result.output.split('\n').slice(-40).join('\n')}`;
+      failures += attributed
+        ? `\n${attributionLines(attributed)}`
+        : `\n--- ristretto gate '${gate.label}' FAILED ---\n${result.output.split('\n').slice(-40).join('\n')}`;
     }
 
     if (!failures) {
