@@ -1,0 +1,71 @@
+#!/usr/bin/env node
+// Self-check for junit.js — run with: node scripts/junit.test.js
+'use strict';
+const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { readReport, decodeEntities } = require('./junit');
+
+const fixture = (n) => path.join(__dirname, 'junit.fixtures', n);
+
+// 1. Entity decoding. vitest writes `>` in a test name as `&gt;`, so a reader that skips this
+//    produces IDs that can never match a baseline written by any other run.
+assert.strictEqual(decodeEntities('a &gt; b'), 'a > b');
+assert.strictEqual(decodeEntities('&lt;x&gt; &amp; &quot;y&quot; &apos;z&apos;'), '<x> & "y" \'z\'');
+assert.strictEqual(decodeEntities('line&#10;break'), 'line\nbreak');
+assert.strictEqual(decodeEntities('hex&#x41;'), 'hexA');
+assert.strictEqual(decodeEntities('&amp;gt;'), '&gt;', 'decoding must not run twice');
+
+// 2. pytest: four testcases, one of each kind.
+let r = readReport(fixture('pytest.xml'));
+assert.ok(r, 'the pytest fixture must parse');
+assert.deepStrictEqual([...r.executed].sort(), [
+  'test_sample::test_errors',
+  'test_sample::test_fails',
+  'test_sample::test_passes',
+], 'a skipped test did not execute and must not appear');
+assert.deepStrictEqual([...r.failing].sort(), [
+  'test_sample::test_errors',
+  'test_sample::test_fails',
+], 'both <failure> and <error> mean the test did not pass');
+
+// 3. vitest: a self-closing-free testcase, and a name carrying an encoded `>`.
+r = readReport(fixture('vitest.xml'));
+assert.ok(r, 'the vitest fixture must parse');
+assert.deepStrictEqual([...r.executed], [
+  'tests/components/settings-notifications-mirroring.test.tsx::settings card and bell toggle over one hook instance > reflects a toggle made in either view within one render',
+]);
+assert.strictEqual(r.failing.size, 0);
+
+// 4. A CDATA body may contain anything at all, including text that looks like markup. It must
+//    never be mistaken for the end of the testcase it sits in.
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ristretto-junit-'));
+const cdata = path.join(dir, 'cdata.xml');
+fs.writeFileSync(cdata,
+  '<testsuites><testsuite><testcase classname="c" name="a">' +
+  '<failure message="x"><![CDATA[</testcase><testcase classname="c" name="ghost"/>]]></failure>' +
+  '</testcase><testcase classname="c" name="b"/></testsuite></testsuites>');
+r = readReport(cdata);
+assert.ok(r, 'CDATA must not defeat the reader');
+assert.deepStrictEqual([...r.executed].sort(), ['c::a', 'c::b'],
+  'a test named inside a CDATA body does not exist');
+assert.deepStrictEqual([...r.failing], ['c::a']);
+
+// 5. An empty but valid report is a real answer: nothing ran, nothing failed. This is what
+//    `pytest` writes on exit 5, and it is why exit 5 stops being a fake red.
+const empty = path.join(dir, 'empty.xml');
+fs.writeFileSync(empty, '<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="0" time="0.01" /></testsuites>');
+r = readReport(empty);
+assert.ok(r, 'an empty report is still a report');
+assert.strictEqual(r.executed.size, 0);
+assert.strictEqual(r.failing.size, 0);
+
+// 6. Missing file, and content that is not JUnit at all → null. The caller falls back to the
+//    exit code rather than inventing a verdict from nothing.
+assert.strictEqual(readReport(path.join(dir, 'nope.xml')), null, 'a missing file is not a report');
+const junk = path.join(dir, 'junk.xml');
+fs.writeFileSync(junk, 'Traceback (most recent call last):\n  ValueError');
+assert.strictEqual(readReport(junk), null, 'output that is not JUnit XML is not a report');
+
+console.log('junit.test.js: all checks passed');

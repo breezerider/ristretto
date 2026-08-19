@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<testsuites name="vitest tests" tests="1" failures="0" errors="0" time="1.4752424">
+    <testsuite name="tests/components/settings-notifications-mirroring.test.tsx" timestamp="2026-08-19T12:47:12.849Z" hostname="JAKOB-HPCDUAL" tests="1" failures="0" errors="0" skipped="0" time="1.4752424">
+        <testcase classname="tests/components/settings-notifications-mirroring.test.tsx" name="settings card and bell toggle over one hook instance &gt; reflects a toggle made in either view within one render" time="1.4720129">
+        </testcase>
+    </testsuite>
+</testsuites>

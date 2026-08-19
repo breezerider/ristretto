@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="1" failures="1" skipped="1" tests="4" time="0.293" timestamp="2026-08-19T14:47:37.066863+02:00" hostname="JAKOB-HPCDUAL"><testcase classname="test_sample" name="test_passes" time="0.001" /><testcase classname="test_sample" name="test_fails" time="0.001"><failure message="AssertionError: one is not two&#10;assert 1 == 2">def test_fails():
+&gt;       assert 1 == 2, "one is not two"
+E       AssertionError: one is not two
+
+test_sample.py:7: AssertionError</failure></testcase><testcase classname="test_sample" name="test_skipped" time="0.000"><skipped type="pytest.skip" message="not today">test_sample.py:9: not today</skipped></testcase><testcase classname="test_sample" name="test_errors" time="0.001"><error message="failed on setup with &quot;fixture 'nonexistent_fixture' not found&quot;">fixture 'nonexistent_fixture' not found</error></testcase></testsuite></testsuites>
