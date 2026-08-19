@@ -41,7 +41,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn, spawnSync, execSync } = require('child_process');
-const { readReport } = require('./junit');
+const { readReport } = require('./testreport');
 const { ratchet, load: loadBaseline, save: saveBaseline } = require('./baseline');
 
 const MODE = process.argv[2] || 'quick';

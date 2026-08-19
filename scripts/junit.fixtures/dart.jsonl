@@ -1,0 +1,11 @@
+{"protocolVersion":"0.1.1","runnerVersion":"1.25.0","pid":1,"type":"start","time":0}
+{"suite":{"id":0,"platform":"vm","path":"test/sample_test.dart"},"type":"suite","time":0}
+{"test":{"id":1,"name":"loading test/sample_test.dart","suiteID":0,"groupIDs":[],"metadata":{"skip":false,"skipReason":null}},"type":"testStart","time":1}
+{"testID":1,"result":"success","skipped":false,"hidden":true,"type":"testDone","time":1319}
+{"test":{"id":3,"name":"passes","suiteID":0,"groupIDs":[2],"metadata":{"skip":false,"skipReason":null}},"type":"testStart","time":1320}
+{"testID":3,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":1333}
+{"test":{"id":4,"name":"fails","suiteID":0,"groupIDs":[2],"metadata":{"skip":false,"skipReason":null}},"type":"testStart","time":1334}
+{"testID":4,"result":"failure","skipped":false,"hidden":false,"type":"testDone","time":1347}
+{"test":{"id":5,"name":"ignored","suiteID":0,"groupIDs":[2],"metadata":{"skip":true,"skipReason":"not today"}},"type":"testStart","time":1348}
+{"testID":5,"result":"success","skipped":true,"hidden":false,"type":"testDone","time":1349}
+{"success":false,"type":"done","time":1400}

@@ -68,4 +68,22 @@ const junk = path.join(dir, 'junk.xml');
 fs.writeFileSync(junk, 'Traceback (most recent call last):\n  ValueError');
 assert.strictEqual(readReport(junk), null, 'output that is not JUnit XML is not a report');
 
+
+// 7. THE DISHONEST GREEN THIS NEARLY SHIPPED. A file that merely MENTIONS the tag — a log, a
+//    source file, this reader itself — must not read as a report. It would parse to zero
+//    testcases, which is "nothing ran, nothing failed", which attributes to no new failures and
+//    PASSES the gate. An empty report is a legitimate answer (pytest writes one on exit 5), so
+//    this cannot be caught by counting testcases; it has to be rejected as not-a-report.
+const mentions = path.join(dir, 'mentions.txt');
+fs.writeFileSync(mentions, "if (!/<testsuites?\b/.test(xml)) return null; // a source file, not a report\n");
+assert.strictEqual(readReport(mentions), null, 'mentioning the tag is not being a report');
+assert.strictEqual(readReport(path.join(__dirname, 'junit.js')), null, 'and the reader is not its own input');
+
+// 8. But a real opening tag still reads, self-closing or not, with or without attributes.
+for (const open of ['<testsuites>', '<testsuites name="x">', '<testsuite tests="0"/>']) {
+  const f = path.join(dir, `open-${Buffer.from(open).toString('hex').slice(0, 8)}.xml`);
+  fs.writeFileSync(f, open);
+  assert.ok(readReport(f), `a real opening tag must still parse: ${open}`);
+}
+
 console.log('junit.test.js: all checks passed');

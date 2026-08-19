@@ -46,7 +46,13 @@ const TESTCASE_RE = /<testcase\b([^>]*?)(\/>|>([\s\S]*?)<\/testcase\s*>)/g;
 function readReport(absPath) {
   let xml;
   try { xml = fs.readFileSync(absPath, 'utf8'); } catch { return null; }
-  if (!/<testsuites?\b/.test(xml)) return null; // not a JUnit report — say so, don't guess
+  // The opening tag proper — the element name must be followed by whitespace, `>` or `/`, not by
+  // any old character. A looser guard matches a file that merely MENTIONS the tag (a log, a
+  // source file, this project's own reader), and such a file parses to zero testcases: a report
+  // saying "nothing ran, nothing failed", which attributes to no new failures and passes the
+  // gate. An empty report is a legitimate answer — pytest writes one on exit 5 — so it cannot be
+  // rejected by counting testcases. It has to be rejected here, by not being a report at all.
+  if (!/<testsuites?[\s>/]/.test(xml)) return null; // not a JUnit report — say so, don't guess
 
   // A CDATA section may contain literal "</testcase>" and would otherwise end the element it
   // sits inside. Blank them out first; nothing here ever reads a body's text.
