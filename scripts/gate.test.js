@@ -987,4 +987,33 @@ assert.ok(!fs.existsSync(path.join(dir, '.ristretto', 'report.xml')),
 assert.ok(/no test report/i.test(r.stderr),
   `the fallback must be stated, not silent — got: ${r.stderr.slice(0, 300)}`);
 
+
+// --- Capture. ---
+// Creating a baseline and updating one are different acts, and only the first is restricted.
+
+// 88. First capture belongs to verify, and is loud. A deliberate moment — brew's pre-flight, or
+//     a person at a terminal — never a hook firing in the middle of the night.
+dir = reporterRepo(['a::1', 'a::2'], ['a::1']);
+r = gate(dir, 'verify');
+assert.strictEqual(r.status, 0, 'the first verify captures rather than refusing to start');
+assert.ok(/captured 1 pre-existing/.test(r.stdout + r.stderr),
+  `the capture must be announced with its count — got: ${(r.stdout + r.stderr).slice(0, 300)}`);
+assert.deepStrictEqual(readBaseline(dir), ['a::1']);
+
+// 89. THE ONE THAT STOPS A BAD DAY BECOMING A BLESSING. Once a baseline exists, even verify may
+//     not widen it. A verify against a database that happens to be down would otherwise record
+//     every one of its failures as "pre-existing" and tolerate them for the whole night.
+dir = reporterRepo(['a::1', 'a::2'], ['a::1', 'a::2']);
+setBaseline(dir, ['a::1']);
+r = gate(dir, 'verify');
+assert.strictEqual(r.status, 1, 'new failures fail a verify');
+assert.deepStrictEqual(readBaseline(dir), ['a::1'], 'and the baseline is left exactly as it was');
+
+// 90. A tolerant green still reports what it is carrying, so it never reads as a clean suite.
+dir = reporterRepo(['a::1', 'a::2'], ['a::1']);
+setBaseline(dir, ['a::1']);
+r = gate(dir, 'verify');
+assert.strictEqual(r.status, 0);
+assert.ok(/1 pre-existing/.test(r.stdout + r.stderr), 'a tolerant green must still name its debt');
+
 console.log('gate.test.js: all checks passed');

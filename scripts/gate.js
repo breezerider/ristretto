@@ -959,9 +959,39 @@ async function main() {
     let hung = false;
     for (const gate of gateList(false)) {
       const used = budget(gate);
+      for (const rel of gate.reports || []) {
+        try { fs.unlinkSync(path.join(projectDir, rel)); } catch { /* nothing to clear */ }
+      }
       const result = await run(gate.cmd, used);
+      if (result === null) recordQuiet(gate.key, lastRunMaxQuietMs);
+
+      // Creating a baseline and updating one are different acts, and only the first is
+      // restricted. `verify` owns creation because it is the one moment somebody chose to run
+      // this — a pre-flight, or a person at a terminal — and it says out loud what it captured.
+      const attributed = attribute(gate);
+      if (attributed) {
+        if (loadBaseline(baselinePath) === null) {
+          saveBaseline(baselinePath, attributed.next, git('rev-parse HEAD'));
+          console.log(`ristretto: captured ${attributed.next.size} pre-existing test failure(s) as the baseline.`);
+          console.log('  These will be TOLERATED until they are fixed. Nothing may be added to this set —');
+          console.log('  a run that introduces a new failure still blocks, and a fixed test leaves for good.');
+          results.push(`${gate.label} ✓`);
+          continue;
+        }
+        if (attributed.verdict === 'pass') {
+          // Never widened once one exists. A verify against a database that happens to be down
+          // would otherwise record every failure it saw as "pre-existing" and tolerate them all.
+          saveBaseline(baselinePath, attributed.next, git('rev-parse HEAD'));
+          if (attributed.tolerated.length) console.error(attributionLines(attributed));
+          results.push(`${gate.label} ✓`);
+          continue;
+        }
+        results.push(`${gate.label} ✗`);
+        failures += `\n${attributionLines(attributed)}`;
+        continue;
+      }
+
       if (result === null) {
-        recordQuiet(gate.key, lastRunMaxQuietMs);
         results.push(`${gate.label} ✓`);
         continue;
       }
