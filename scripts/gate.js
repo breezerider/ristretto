@@ -545,9 +545,26 @@ function auditScopedGates() {
   }
 }
 
+// Every report path this config names, in any gate. Used to tell a *report* flag apart from a
+// dropped one: the full gate and a scoped route legitimately write to different paths, because
+// they run from different directories — the full one often `cd`s into a subproject first, so its
+// path carries a `../` the route has no use for. Comparing those as if one had lost something
+// warns about correct config, and a warning that cries wolf is worse than no warning at all.
+function allReportPaths() {
+  const out = [...reportList(gates.testReport)];
+  if (Array.isArray(gates.testChanged)) {
+    for (const entry of gates.testChanged) {
+      if (entry) out.push(...reportList(entry.report));
+    }
+  }
+  return out;
+}
+
 const gapReported = new Set();
 function reportDroppedFlags(label, cmd) {
-  const missing = droppedFlags(gates.test, cmd);
+  const reports = allReportPaths();
+  const missing = droppedFlags(gates.test, cmd).filter((flag) =>
+    !reports.some((p) => flag.includes(p) || flag.includes(path.basename(p))));
   if (!missing.length || gapReported.has(label)) return;
   gapReported.add(label);
   console.error(`ristretto: the scoped gate '${label}' is missing a flag its full "test" gate has: ${missing.join(', ')}`);

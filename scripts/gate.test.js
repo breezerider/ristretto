@@ -1079,4 +1079,38 @@ r = gate(dir, 'full');
 assert.strictEqual(r.status, 0, 'a scoped single-command gate must attribute like any other');
 assert.ok(/1 pre-existing/.test(r.stderr));
 
+
+// 94. A report flag is not a dropped flag. The full gate and a scoped route legitimately write
+//     their reports to DIFFERENT paths, because they run from different directories — the full
+//     one may `cd` into a subproject first. Comparing them as if one had lost something reports
+//     a gap on exactly the config this plugin now recommends, and a warning that cries wolf on
+//     correct config is worse than no warning.
+dir = tmpRepo(JSON.stringify({
+  gates: {
+    test: 'cd be && pytest -q -n auto --junitxml=../.ristretto/r.xml',
+    testChanged: [{
+      name: 'be',
+      match: ['be/**'],
+      cmd: 'pytest -q -n auto --junitxml=.ristretto/r.xml {files}',
+      report: '.ristretto/r.xml',
+    }],
+    testReport: '.ristretto/r.xml',
+  },
+}));
+r = gate(dir, 'verify');
+assert.ok(!/missing a flag/.test(r.stderr),
+  `a differing report path must not read as a dropped flag — got: ${r.stderr.slice(0, 400)}`);
+
+// 95. And the audit must still catch a genuinely dropped one beside it.
+dir = tmpRepo(JSON.stringify({
+  gates: {
+    test: 'pytest -q -n auto --junitxml=.ristretto/r.xml',
+    testChanged: [{ name: 'be', match: ['be/**'], cmd: 'pytest -q --junitxml=.ristretto/r.xml {files}', report: '.ristretto/r.xml' }],
+    testReport: '.ristretto/r.xml',
+  },
+}));
+r = gate(dir, 'verify');
+assert.ok(/missing a flag/.test(r.stderr) && /-n auto/.test(r.stderr),
+  `the real dropped flag must still be named — got: ${r.stderr.slice(0, 400)}`);
+
 console.log('gate.test.js: all checks passed');
