@@ -145,6 +145,12 @@ const formatBrokenPath = path.join(projectDir, '.ristretto', 'format-broken');
 const baselinePath = path.join(projectDir, '.ristretto', 'baseline.json');
 const orchestratingPath = path.join(projectDir, '.ristretto', 'orchestrating');
 
+// Files ristretto reads and never writes. A hand-curated memory file that an agent appends to
+// stops being worth reading, so every brief in every command says so — and prose held right up
+// until one subagent read it differently and rewrote the house rules mid-feature. Same rule,
+// enforced instead of asked for. Matched on basename so a nested one is covered too.
+const HOUSE_RULE_FILES = new Set(['claude.md', 'agents.md']);
+
 // No config → ristretto not set up in this repo → never interfere.
 if (!fs.existsSync(configPath)) process.exit(0);
 
@@ -928,6 +934,21 @@ function hangAdvice(gate, result, usedSec) {
 }
 
 async function main() {
+  if (MODE === 'guard') {
+    const file = hook.tool_input && hook.tool_input.file_path;
+    if (!file) process.exit(0);
+    if (!HOUSE_RULE_FILES.has(path.basename(file).toLowerCase())) process.exit(0);
+    // Only while a run is armed. Outside one this file is the user's own business — `/revise-claude-md`
+    // is exactly that, and a guard that fired then would be a bug, not a safeguard.
+    if (!fs.existsSync(markerPath)) process.exit(0);
+    const idle = markerIdleMs(markerPath);
+    if (idle !== null && idle > MARKER_MAX_IDLE_MS) process.exit(0);
+    console.error(`ristretto: ${path.basename(file)} holds this repo's house rules — ristretto reads it, never writes it.`);
+    console.error('  Whatever is stale there goes in your final message instead; the user decides what lands in that file.');
+    console.error('  (Only while a ristretto run is armed — outside one, edit it freely.)');
+    process.exit(2);
+  }
+
   if (MODE === 'quick') {
     const file = hook.tool_input && hook.tool_input.file_path;
     if (gates.format && file && fs.existsSync(file) && formatAllowed(file)) {

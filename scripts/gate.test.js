@@ -1113,4 +1113,51 @@ r = gate(dir, 'verify');
 assert.ok(/missing a flag/.test(r.stderr) && /-n auto/.test(r.stderr),
   `the real dropped flag must still be named — got: ${r.stderr.slice(0, 400)}`);
 
+// 96. The house-rule guard. Without a config ristretto is not set up here and must never
+// interfere, whatever the write target is.
+const write = (f) => JSON.stringify({ tool_input: { file_path: f } });
+dir = tmpRepo();
+assert.strictEqual(gate(dir, 'guard', write('CLAUDE.md')).status, 0,
+  'guard without config must exit 0');
+
+// 97. Armed run + a write to CLAUDE.md → refused, and the message names the file so the agent
+// knows what it hit rather than guessing.
+dir = tmpRepo(JSON.stringify({ gates: { lint: PASS } }));
+arm(dir);
+r = gate(dir, 'guard', write(path.join(dir, 'CLAUDE.md')));
+assert.strictEqual(r.status, 2, 'writing CLAUDE.md while armed must be refused');
+assert.ok(/CLAUDE\.md/.test(r.stderr), 'the refusal must name the file');
+assert.ok(/final message/.test(r.stderr), 'and must say where the staleness goes instead');
+
+// 98. AGENTS.md is the same rule, and a nested one is matched on its basename — the house rules
+// near the files a feature touches are exactly the ones a subagent is tempted to "fix".
+assert.strictEqual(gate(dir, 'guard', write('backend/sub/AGENTS.md')).status, 2,
+  'a nested AGENTS.md must be refused too');
+
+// 99. Case is not the point: on a case-insensitive filesystem `claude.md` is the same file, and
+// a guard that could be stepped around by shift-key is not a guard.
+assert.strictEqual(gate(dir, 'guard', write('claude.md')).status, 2,
+  'the match must be case-insensitive');
+
+// 100. Everything else passes straight through. This hook runs before EVERY Write and Edit, so
+// anything but a house-rule file must cost nothing and decide nothing.
+assert.strictEqual(gate(dir, 'guard', write('backend/app/main.py')).status, 0,
+  'an ordinary file must not be touched by the guard');
+assert.strictEqual(gate(dir, 'guard', '{}').status, 0,
+  'a payload with no file_path must exit 0');
+
+// 101. No armed run → the file is the user's own business. This is `/revise-claude-md`, and a
+// guard that fired here would be a bug rather than a safeguard.
+dir = tmpRepo(JSON.stringify({ gates: { lint: PASS } }));
+assert.strictEqual(gate(dir, 'guard', write('CLAUDE.md')).status, 0,
+  'without an armed run the guard must stay out of the way');
+
+// 102. A marker left behind by a session that died must not lock the file forever. Same idleness
+// rule the full gate uses — measured from the marker, not from the calendar.
+arm(dir);
+const longAgo = Date.now() / 1000 - 25 * 60 * 60;
+fs.utimesSync(path.join(dir, '.ristretto', 'pulling'), longAgo, longAgo);
+assert.strictEqual(gate(dir, 'guard', write('CLAUDE.md')).status, 0,
+  'a stale marker must not keep the house rules locked');
+
 console.log('gate.test.js: all checks passed');
