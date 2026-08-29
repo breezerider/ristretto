@@ -25,7 +25,7 @@ Each block is cumulative — an unstamped project gets all of them, in order. Do
 1. **Roadmap statuses:** `needs-ops` → `needs-human`. No other status changes.
 2. **`docs/ristretto/manual-ops.md` → `docs/ristretto/manual-checks.md`** (rename the file; keep its history by using `git mv` if the file is tracked). Inside it, and in the header text:
    - `- [ ] **before** · <where> · <what>` → `- [ ] **proves** · <criterion> · <where> · <what>`
-   - `- [ ] **after** · <where> · <what>` → `- [ ] **deploy** · — · <where> · <what>`
+   - `- [ ] **after** · <where> · <what>` → `- [ ] **deploy** · — · <where> · <what>` (the `deploy` lane is retired in 0.15 below; a project migrating straight from 0.12 will convert these once and then park them in the same pass)
    - **Preserve every tick.** A `- [x]` stays `- [x]`. Re-ticking is the user's signature, not yours, and silently un-ticking one would make ristretto re-run work a human already did.
    - For a `proves` line, the criterion it proves is usually already recorded on its `_blocks:_` line — move it into the new slot. If it genuinely isn't recorded, write `?` and list that line in your summary rather than guessing which criterion it belongs to.
 3. **Plans** in `plans/` and `plans/archived/`: `Manual-Ops:` → `Manual-Checks:`, with the same line-shape change as above.
@@ -63,6 +63,38 @@ meaning, and worse than leaving the feature off.
 7. Move `Blockers:` from `## Approach` into `## Contract` if it's in the old place.
 8. Say in your summary which plans came out with empty Contract fields, and suggest `/ristretto:prep <ID> deep` for any that are still `planned` — a thin contract is the single largest cause of an inaccurate build.
 
+### → 0.15 — checks mean "out of reach", and review findings have somewhere to live
+
+1. **Retire the `deploy` lane.** A `deploy` line was a rollout step — a prod backfill, a key rotation, a flag for real users. ristretto no longer tracks those at all: it is a development loop, and production is not its business. **Do not delete them** — a person wrote them and may still need to do them. Move every `- [ ] **deploy**` line (ticks preserved exactly) to the bottom of `docs/ristretto/manual-checks.md` under:
+
+   ```markdown
+   ## Retired — not tracked by ristretto
+   Rollout steps from an older format. ristretto no longer reads this section;
+   keep or delete it as you like.
+   ```
+
+   List them in your summary. A `- [ ] **proves**` line is untouched.
+
+2. **Add the third field to `proves` lines** where it is obvious and leave it alone where it is not: the shape is now `- [ ] **proves** · <criterion> · <what was out of reach> · <what to do>`. The old "where a human does it" slot usually already holds it (`Supabase SQL editor`); keep the text as-is. Never invent a reason.
+
+3. **Say this, once:**
+
+   ```
+   ☕ ristretto 0.15 narrowed what counts as a manual check. It now means one thing:
+     the repo gave the agent no path to it. A migration your dev stack already applies,
+     or a screen your tests can drive, is no longer a check — it's a test. Nothing about
+     production is ever a check any more.
+
+     I have NOT reclassified your existing [human] criteria. The planner re-settles each
+     one against the actual code on the next pull or brew, and dropping the ones it can
+     reach is now its job — so this corrects itself as you go. To settle a plan sooner,
+     run /ristretto:prep <ID>.
+   ```
+
+   **Do not bulk-reclassify `[human]` → `[auto]` here.** It looks like a tidy mechanical sweep and it is not: whether a criterion is reachable depends on the code, this file's whole job is shape rather than meaning, and the planner already does it properly with HEAD in front of it. Reclassifying blind would silently stop testing things or start claiming things that cannot be proven.
+
+4. **The `needs-review` status is additive** — nothing on disk changes. No existing row can be one, and `brew` writes them from now on.
+
 ## 3. Stamp, report, and carry on
 
 ```
@@ -71,7 +103,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/version.js" stamp
 
 Then report, in this order:
 
-1. What changed, by file count: plans updated, roadmap statuses renamed, checklist lines reshaped, config keys added.
+1. What changed, by file count: plans updated, roadmap statuses renamed, checklist lines reshaped, config keys added, rollout lines parked.
 2. **Every criterion you classified `[human]`**, listed, so the user can correct any you got wrong.
 3. Anything you marked `?` because the old format didn't record it.
 4. Plans left with empty Contract fields, and the `prep ... deep` suggestion for the ones still `planned`.
@@ -86,4 +118,4 @@ Then **continue with the command the user actually ran.** The migration is not t
 - **Shape, never meaning.** No criterion added, removed, or reworded. No status invented. No plan re-planned. No box ticked or un-ticked.
 - **Archived plans are history.** Rename fields inside them so they stay readable, but never reclassify or rewrite their content — an archived plan is the evidence of what was actually built.
 - **Never migrate downward.** A project newer than the plugin is a stale install; say so and stop.
-- **One judgment only** — `[auto]` vs `[human]` — and it is always reported, never silent.
+- **One judgment only** — `[auto]` vs `[human]` on a project arriving from 0.12 or earlier — and it is always reported, never silent. Once a project is at 0.13 or later that classification is settled; a later block never revisits it, however much a rule change might seem to invite it.

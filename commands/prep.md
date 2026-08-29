@@ -37,9 +37,10 @@ If `roadmap.md` is new, start it with this table:
 
 Don't write the stamp by hand — create the roadmap, then run `node "${CLAUDE_PLUGIN_ROOT}/scripts/version.js" stamp`, which fills in the version this plugin actually is. A hand-typed version is a guess, and a wrong one sends the next command into a migration the project doesn't need.
 
-Status values: `planned` · `in-progress` · `blocked` · `needs-human` · `done`.
+Status values: `planned` · `in-progress` · `blocked` · `needs-human` · `needs-review` · `done`.
 `blocked` is set by `pull`/`brew` when a feature can't proceed without a **decision** — the row carries a one-line reason. Re-prepping a `blocked` feature (refining its plan to resolve the reason) flips it back to `planned`.
-`needs-human` means the opposite kind of stuck: the spec is fine and the code is built, but a **human has to run something** ristretto can't (see *Manual checks* below). It is a closing status, not a blocking one.
+`needs-human` means the opposite kind of stuck: the spec is fine and the code is built, but the repo gave the agent **no path to something a criterion needs** (see *Manual checks* below). It is a closing status, not a blocking one.
+`needs-review` is the third kind: the code is built, committed and gated **green**, but review findings are still open after three rounds. Nothing is wrong with the spec and nothing is unreachable — a reviewer simply still objects, and a person should judge it. Also a closing status. Only `brew` writes it; `pull` runs with you present, so it surfaces the findings to you instead.
 Flight: a short kebab slug grouping related features, or `—` for a standalone feature.
 
 ## Decompose only when there's a real seam
@@ -67,7 +68,7 @@ When inputs belong together — a split of one feature, or several features that
 
 When one resulting feature can't start until another lands, record it with **`Depends:`** (the prerequisite feature IDs) on the dependent plan. When two are independent and could be worked side by side, note it with **`Parallel-with:`**. Both default to `—` (no constraint). These are honest notes about the graph — `pull next` reads `Depends:` to avoid pulling a feature whose foundation isn't built yet; `Parallel-with:` is informational. ristretto stays one-feature-at-a-time; you're recording order, not running waves.
 
-A `Depends:` is satisfied by a prerequisite that is `done` **or** `needs-human` — a pending manual check means an environment step is outstanding, not that the code and its `Provides:` are missing. Only `blocked` holds dependents back.
+A `Depends:` is satisfied by a prerequisite that is `done`, `needs-human` **or** `needs-review` — all three have their code built and their `Provides:` present; what is outstanding is a step someone must run or an opinion someone must judge, not missing code. Only `blocked` holds dependents back.
 
 Keep it light: only add `Depends:` where a real prerequisite exists. Most features depend on nothing.
 
@@ -100,10 +101,18 @@ Keep it light: only add `Depends:` where a real prerequisite exists. Most featur
 
    **Then give every criterion a proof method — there are exactly two, and "none" is not one of them.**
 
-   - **`[auto]`** — a test, a gate, or a measurement the agent can run proves it. The default; most criteria are this.
-   - **`[human]`** — nobody automated can prove it, so a person must. Something that has to be *run* against a live environment (a migration, a seeded record, a third-party console) or something that has to be *looked at* (does the dropdown open, does the mobile layout hold, does the German copy read right). Every `[human]` criterion gets a matching line in `Manual-Checks:`.
+   - **`[auto]`** — a test, a gate, or a measurement the agent can run proves it. The default, and the right answer far more often than it first looks.
+   - **`[human]`** — **ristretto has no way to reach the thing this criterion is about.** Every `[human]` criterion gets a matching line in `Manual-Checks:` naming what was out of reach.
 
-   **A criterion with no proof method is the bug this rule exists to kill.** Unclassified is what made `brew` stop dead in the night on a UI criterion nobody could execute, waiting on an answer no one was awake to give. Classifying it costs one word and the loop never stalls again — it builds the feature, commits it, and leaves you a checklist. **Do not drop a criterion because it can't be automated.** That loses the migration you needed to run and the screen you needed to look at, which is worse than any stall: the plan quietly stops describing the feature.
+   **`[human]` is a statement about reach, never about subject matter.** "It involves a database", "it involves a screen", "it involves an external service" — those are subjects, and the subject decides nothing. The only question is whether a path exists from this repo to that thing. A migration the project's own dev stack applies — docker-compose, a `migrate` script, a test harness that migrates on boot — is reachable: the agent runs it, and the criterion is `[auto]`. The same migration against a hosted console with no credentials anywhere in the environment is not reachable, and that is a real `[human]`. Two features touching the same schema in two repos get different answers, and that is correct.
+
+   **Assume reach until you have a concrete reason to believe otherwise.** Name the reason in the check — which credential, which console, which device. If you cannot name what specifically was out of reach, it wasn't; it was a test nobody wanted to write. A repo whose migrations, fixtures, generated files and services all live in its compose file has close to zero `[human]` criteria in it, whatever its features touch.
+
+   **Nothing about production is ever a criterion.** This is a development loop. A rollout step, a prod backfill, a flag enabled for real users, a key rotated in a live system — these are not acceptance criteria, they do not go in `Manual-Checks:`, and they are not ristretto's business. If a criterion can only be proven in production, it is written wrong: rewrite it against dev, or it is a `Blockers:` line.
+
+   **Something to look at is `[human]` only when the repo gives the agent no way to drive it.** If the project has a browser driver, a widget test, a snapshot harness — use it; "does the dropdown open" is then an ordinary `[auto]` criterion and writing it off as human is just an untested feature with a note attached. Where there is genuinely no way to render the thing, prefer reasoning about the markup and the component over deferring to a person. What survives is the narrow residue — a physical device, a real payment terminal, a rendering only a person can judge — and it should feel like a rare exception, because it is.
+
+   **A criterion with no proof method is still the bug this rule exists to kill.** Unclassified is what made `brew` stop dead in the night waiting on an answer no one was awake to give. **Do not drop a criterion because it can't be automated** — that loses the thing you needed and the plan quietly stops describing the feature. But the fix for "hard to prove" is a test, and `[human]` is not the escape hatch for a criterion you did not want to write one for. Over-marking has a cost the loop cannot see and you pay by hand: every false `[human]` is an item you must read, evaluate and dismiss, and a checklist that is mostly noise is one nobody reads at all — including the entry that actually mattered.
 
 3. **Write `docs/ristretto/plans/<FEATURE-ID>.md`**:
 
@@ -118,13 +127,13 @@ Keep it light: only add `Depends:` where a real prerequisite exists. Most featur
    ## Contract
    - Acceptance:
      - [auto] <criterion a test, gate, or measurement proves>
-     - [human] <criterion only a person can run or look at>
+     - [human] <criterion whose subject this repo gives the agent no path to>
    - Provides: <public surface this feature exposes, at type level —
        `sendOtp(phone: string): Promise<OtpToken>` — or — >
    - Consumes: <surface from Depends: features this one calls, same form, or — >
    - Decisions: <resolved question -> the ruling, one line each>
    - Units: <the 2-6 units of work inside this feature, one line each, or — >
-   - Manual-Checks: <proves|deploy · which criterion · where · what to do or look at,
+   - Manual-Checks: <proves · which criterion · what was out of reach · what to do,
        one line each, or — >
    - Blockers: <what could not be made checkable -> who/what can answer, or — >
 
@@ -141,16 +150,19 @@ Keep it light: only add `Depends:` where a real prerequisite exists. Most featur
 
    **This is the opposite default from "Decompose only when there's a real seam" above, and the two must not be confused.** Splitting one input into several *roadmap features* is discouraged — it multiplies git-tracking IDs. Naming the *units of work inside one feature* is encouraged and costs nothing: same ID, same plan, same branch, same commit. `Units:` is what `pull`'s planner expands into per-unit file paths, signatures, and tests; a feature that arrives with `Units: —` when it plainly has several is the single most common cause of a thin build plan and inaccurate code.
 
-5. **Fill `Manual-Checks:` — one line for every `[human]` criterion, plus any deploy step.** Each line is:
+5. **Fill `Manual-Checks:` — exactly one line for every `[human]` criterion, and nothing else.** Each line is:
 
-   `<proves|deploy> · <the criterion it proves, or —> · <where a human does it> · <what to do or look at>`
+   `proves · <the criterion it proves> · <what was out of reach> · <what a person has to do>`
 
-   - **`proves`** — this check is the *only* proof of a `[human]` acceptance criterion. Anything a person must **run**: SQL against a live database, a migration against an environment, a secret or env var, a switch in a third-party console, a DNS record, a signing key or provisioning profile, an app-store step, a physical device or peripheral, a queue or broker that has to exist. And equally, anything a person must **look at**: the dropdown opens, the mobile layout holds at 375px, the animation isn't janky, the copy reads right in the target language, the print stylesheet paginates. The code is still written, gated, reviewed and committed; that one criterion just isn't proven until a person ticks the box. **Every `[human]` criterion needs exactly one of these, and every `proves` line names the criterion it belongs to.**
-   - **`deploy`** — a rollout step that proves nothing (backfill prod, rotate a key, enable the flag for real users). Nothing about the build or the closing status waits on it; it stays on the list because that's what the list is for.
+   Every line is the *only* proof of one `[human]` criterion and names it. There is no second kind of line: if it does not prove a criterion, it does not belong on this list. The code is still written, gated, reviewed and committed; that one criterion just isn't proven until a person ticks the box.
 
-   Ask about this in roast mode whenever a feature touches a schema, an external service, configuration, or anything visual — it is the single most common thing a plan forgets, and it is what used to stop an unattended `brew` in its tracks. Don't put the SQL or the command here; `Manual-Checks:` names the step. The exact thing to run or look at is written by `pull`/`brew` into `docs/ristretto/manual-checks.md`, against the code as it actually ends up.
+   **The list has no rollout lane.** There is nowhere here to record a prod backfill, a key rotation, or a flag enabled for real users, because ristretto never asks anyone to do those — see the production rule above. A `Manual-Checks:` that mentions production is a defect in this command, not a service to the reader.
 
-   `pull`/`brew` may also discover checks that prep didn't foresee — the planner reads HEAD and sees the column that isn't there. That's expected, not a prep failure.
+   **In roast mode, push the other way.** For every `[human]` a feature arrives with, ask what specifically is out of reach and whether this repo really has no path to it — the dev stack that already applies migrations, the driver that can already press the button. Most survive that question as `[auto]`. This is the reverse of what this rule used to say, and deliberately: an unproven criterion is a cost the loop absorbs, while a false check is a cost the human pays, and the second one is the one that made people stop reading the list.
+
+   Don't put the SQL or the command here; `Manual-Checks:` names the step. The exact thing to run is written by `pull`/`brew` into `docs/ristretto/manual-checks.md`, against the code as it actually ends up.
+
+   `pull`/`brew` may also find that something prep thought was out of reach is not — the planner reads HEAD and finds the compose service or the test driver. Dropping a check for that reason is expected, not a prep failure. Adding one is expected too, on the same evidence, and in both directions the planner's finding wins: it looked at the code.
 
 6. **Check `Consumes:` against `Provides:`.** When feature B lists A in `Depends:`, B's `Consumes:` must be a subset of A's `Provides:`. Check this at prep time and say so if it isn't — a mismatch here is the cheapest bug you will ever fix. Read A's plan wherever it lives, `plans/` or `plans/archived/`.
 

@@ -7,7 +7,7 @@ A small set of commands following the lifecycle **review → plan → build**, p
 - **`/ristretto:grind <feature>`** — honest refinement review: plain-language summary, story-point estimate, the problems it actually has, and a Ready / Not-Ready verdict. Read-only.
 - **`/ristretto:prep <features | ideas> [deep]`** — turns features *or* raw ideas into plans and adds them to the project roadmap. Each plan carries a deep, durable **`## Contract`** (checkable acceptance criteria, `Provides:` / `Consumes:` at type level, resolved decisions, the units of work) and a one-screen **`## Approach`**. Splits an input into sub-features only when there's a real seam (independent deliverables, separate "done", or too big for one sprint) — otherwise keeps it whole. Features that belong together get a shared `Flight` slug, and a real prerequisite is recorded as `Depends:` so ordering is explicit. Fast by default; **escalates into roast mode** — one question at a time, each with a recommended answer, checkpointed to the plan file after every answer — the moment a criterion can't be made checkable or `Provides:` can't be filled. `deep` forces it. Planning only, no code.
 - **`/ristretto:pull <feature | next>`** — implements one feature against the *current* code, in auto mode, then closes it by archiving the plan and updating the roadmap. A **planner** subagent first expands the Contract into a throwaway build plan against HEAD — real paths, real signatures, real test code — so the implementer transcribes rather than re-plans. Tests come first (the build plan's cases become failing tests, then code to green), and before any commit the diff passes an **independent review** by a fresh subagent — bugs must be fixed, two rounds max. Pass `raw` for an ungated spike (see below).
-- **`/ristretto:brew`** — brew the whole pot: autonomously pulls every eligible planned feature in sequence — same gates, evidence, review, and close as `pull`, one commit per feature on a single `feature/brew-<date>` session branch. **Each feature runs through fresh subagents** — planner, implementer, independent reviewer, closer: the main conversation stays a small orchestrator no matter how big the batch, every implementation sees exactly one spec, and nothing is committed unreviewed. A planner that can't satisfy the Contract blocks the feature before an implementer ever runs. Anything needing a **decision** gets status `blocked` with a one-line reason instead of a guess; anything needing a **human to run something** gets `needs-human`, a line in `manual-checks.md`, and still gets built — it never stalls the features behind it. You walk through `status blocked` and `status checks` afterward, refine or run, and re-brew. It never stops to ask you anything: `planned` means every decision was already made in `prep`, so a question at 3am is a prep bug, not a pause. Tests are scoped to each feature during the loop and the full suite is proven once at the end, so a slow suite doesn't make a batch impossible. For when you've prepped a batch and don't want to babysit the roadmap.
+- **`/ristretto:brew`** — brew the whole pot: autonomously pulls every eligible planned feature in sequence — same gates, evidence, review, and close as `pull`, one commit per feature on a single `feature/brew-<date>` session branch. **Each feature runs through fresh subagents** — planner, implementer, independent reviewer, closer: the main conversation stays a small orchestrator no matter how big the batch, every implementation sees exactly one spec, and nothing is committed unreviewed. A planner that can't satisfy the Contract blocks the feature before an implementer ever runs. Anything needing a **decision** gets status `blocked` with a one-line reason instead of a guess; anything needing a **human to run something** gets `needs-human`, a line in `manual-checks.md`, and still gets built; anything still carrying review findings after three rounds gets `needs-review` — committed green, findings recorded verbatim, never deleted. None of the three stalls the features behind it. You walk through `status blocked`, `status checks` and `status review` afterward, refine or run or judge, and re-brew. It never stops to ask you anything: `planned` means every decision was already made in `prep`, so a question at 3am is a prep bug, not a pause. Tests are scoped to each feature during the loop and the full suite is proven once at the end, so a slow suite doesn't make a batch impossible. For when you've prepped a batch and don't want to babysit the roadmap.
 - **`/ristretto:status [filter]`** — read-only view of the roadmap: what's planned, in progress, and done. Changes nothing.
 - **`/ristretto:help`** — the menu: every command, the workflow, and the house rules as a CLI-style card. Read-only, instant.
 - **`/ristretto:tamp [path | feature | nothing]`** — honest lean-code review: finds runtime waste, duplication, dead/over-built code, and readability drag in a diff or file, ranked and capped at the few that matter. Read-only; pass `fix` to apply the top findings. The code-analogue of `grind`.
@@ -85,29 +85,45 @@ If `testChanged` is empty, the loop just runs the full suite as before — nothi
 
 Some criteria can't be proven by anything the agent can run. Applying a migration, setting a secret, enabling an API in someone's console — and just as often, *looking at the thing*: does the dropdown open, does the layout hold at 375px, does the German copy read right. A plan that needed one used to collapse into `blocked`, which is the wrong word. `blocked` means *the spec is broken, go refine it*. "Run this migration" and "check this screen" are not spec gaps; the spec is fine and a person has to do something. Same status, opposite remedy — so they're two statuses:
 
-- **`blocked`** — a missing decision. `/ristretto:status blocked` is the refinement queue; fix it with `prep`.
-- **`needs-human`** — a missing keystroke or a missing pair of eyes. `/ristretto:status checks` is the do-it-yourself queue; fix it with your hands.
+- **`blocked`** — a missing decision. `/ristretto:status blocked` is the refinement queue; fix it with `prep`. **The only status that holds dependents back.**
+- **`needs-human`** — something the repo gave the agent no path to. `/ristretto:status checks` is the do-it-yourself queue; fix it with your hands.
+- **`needs-review`** — built, committed, gated green, and a reviewer still objects after three rounds. `/ristretto:status review` is the judgement queue; fix it with your opinion.
 
 The rule that makes this work is upstream, in `prep`: **every acceptance criterion carries a proof method, `[auto]` or `[human]`, and unclassified is not an option.** That is the whole fix. An unclassified criterion is what used to stop an unattended run dead — the loop reached something no test could settle, had no state for it, and waited on an answer from someone asleep. Classifying costs one word. And the criterion is never *dropped* for being unautomatable: dropping it loses the migration you needed to run and the screen you needed to look at, which is worse than any stall, because the plan quietly stops describing the feature.
 
-`prep` declares known checks in the Contract's `Manual-Checks:`, and the **planner discovers the rest against HEAD** — it reads the code and sees that the column the Contract needs isn't in the schema. Either way the check lands in `docs/ristretto/manual-checks.md` as a ticked-by-you checklist item, naming the criterion it proves:
+`prep` declares suspected checks in the Contract's `Manual-Checks:`, but **the planner settles them against HEAD** — it is the first actor that has read the code, so it deletes the ones this repo can reach and adds the ones it genuinely cannot. A prep line saying "apply the migration by hand" against a repo whose compose file migrates on boot is simply wrong, and the planner drops it. What survives lands in `docs/ristretto/manual-checks.md` as a ticked-by-you checklist item, naming both the criterion it proves and what was out of reach:
 
 ```markdown
 ## BREW-224 — user tiers
-- [ ] **proves** · criterion 2 · Supabase SQL editor (dev) · add the column the code reads
+- [ ] **proves** · criterion 2 · hosted Supabase project — no service-role key in this
+      environment, so the agent cannot apply this itself · add the column the code reads
       ```sql
       alter table profiles add column tier text not null default 'free';
       ```
       _criterion:_ "a free user sees the upgrade banner" · _test:_ `tier banner renders` (skipped)
-- [ ] **proves** · criterion 4 · your browser, 375px wide · the upgrade banner must not
-      overlap the nav on a narrow screen — look at it and tick if it holds
 ```
+
+One entry, because one is a realistic number. The same feature's "does the banner overlap the nav at 375px" is *not* here — the repo can drive a browser, so that is a test.
 
 **The feature still gets built.** The code is written, gated, reviewed, and committed exactly as always; only the tests that need the live environment are written *skipped*, each naming the check that unblocks it. `needs-human` is a **closing** status, not a blocking one — the plan is archived, the commit is made, and the row records which criteria are `pending human check` instead of proven.
 
 The part that matters for an unattended `brew`: **`needs-human` never holds up another feature.** A `Depends:` is satisfied by `done` *or* `needs-human`, because the prerequisite's `Provides:` exist in the code either way — what's outstanding is in a database console or on a screen, not in the repo. Only `blocked` stops dependents. One pending `alter table` can't stall a whole flight.
 
-Run the check, tick the box, and `/ristretto:pull <ID>` (or the next `brew`) un-skips those tests, proves the pending criteria, and flips the row to `done`. Checks marked `deploy` — backfills, prod flags, key rotations — don't hold anything up at all: the feature closes `done` and the check stays on the list as a deploy step. ristretto never ticks a box itself; that check is your signature that it really happened.
+Run the check, tick the box, and `/ristretto:pull <ID>` (or the next `brew`) un-skips those tests, proves the pending criteria, and flips the row to `done`. ristretto never ticks a box itself; that check is your signature that it really happened.
+
+**The bar for getting on this list is reach, not subject.** A check exists only where the repo gives the agent no path to the thing — a hosted console with no credential in the environment, a device that isn't there. A migration the dev stack already applies is run, not delegated; a screen the repo can drive is tested, not eyeballed. And **nothing on this list is ever about production**: no backfills, no prod flags, no key rotations. This is a development loop, and a checklist that fills up with things you could have automated is one you stop reading — including the entry that mattered.
+
+## `needs-review`: the pot never stops
+
+Review runs in rounds — findings, a fixer, a fresh reviewer to check the fix. Three rounds, and then something has to happen. `brew` used to `git restore` the work and mark the row `blocked`.
+
+That was wrong twice over. The gates are **green** at that moment: the tests pass, the code works, and what's outstanding is an advisory opinion from an actor that runs no gates and changes no files — so deleting a working tree over it is disproportionate. And `blocked` is the one status that holds dependents back, so a single unresolved finding didn't cost one feature, it cost that feature and every feature behind it in the flight. One objection at feature 4 could empty a pot of 15, and the final line still read `pot empty`, which looks like a clean finish.
+
+Every subagent that ever met that rule declined it. One ignored the findings and carried on; one took an unsanctioned fourth round; one invented a `.ristretto/stranded/` directory to park work the command gave it nowhere to keep. Three improvisations, one diagnosis: **the loop had no resting state for "built, green, still argued about."** They were right, so now it has one.
+
+Round 3 commits. The status is `needs-review`, the open findings are copied **verbatim** into the archived plan under `## Open findings` — not summarised, not resolved — and the loop moves to the next feature. Like `needs-human`, it satisfies `Depends:`, so the features behind it keep brewing; unlike `blocked`, nothing about it is a spec problem. `/ristretto:status review` is the queue, `/ristretto:pull <ID>` works it, and the worst case overnight is a longer morning queue rather than a half-empty pot.
+
+**And where the findings turn on a question the contract never answered, `brew` takes the recommended reading rather than stalling** — then says so, loudly: `decision taken: <question> → <ruling>` in the Evidence, on the result line as it happens, and first in the review queue with a `⚠`. It's the one place in ristretto the loop may settle a question the spec left open, it is never allowed to be quiet about it, and it stays fixable for as long as it takes you to disagree. A stall costs the whole night; a flagged default costs a minute in the morning.
 
 ## `raw`: the ungated lane
 
@@ -176,6 +192,7 @@ To share with the team, push this folder to a Git repo and `/plugin marketplace 
 /ristretto:status open                        # only what's not done yet
 /ristretto:status blocked                     # the refinement queue after a brew
 /ristretto:status checks                         # the do-it-yourself queue: SQL, migrations
+/ristretto:status review                      # the judgement queue: open review findings
 /ristretto:shot ROAST-150 rename the menu item # plan + do a trivial one in one pass
 /ristretto:tamp                               # review the changes I just made
 /ristretto:tamp src/auth                      # green-up pass on existing code

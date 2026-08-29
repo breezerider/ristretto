@@ -33,8 +33,11 @@ THE WORKFLOW
                                     each row names its spec gap. refine via
                                     prep (flips it back to planned), re-brew.
      /ristretto:status checks          your do-it-yourself queue — the SQL, migrations
-                                    and secrets ristretto can't run. tick the box
-                                    in docs/ristretto/manual-checks.md, re-brew.
+                                    and secrets ristretto had no path to. tick the
+                                    box in docs/ristretto/manual-checks.md, re-brew.
+     /ristretto:status review          your judgement queue — built, committed and
+                                    green, but a reviewer still objects. read the
+                                    open findings, then /ristretto:pull <ID>.
 
 THE REST OF THE MENU
   /ristretto:shot <feature>         prep + pull one trivial feature in one pass.
@@ -73,14 +76,20 @@ HOUSE RULES
   • fast loop, honest end — the loop tests only what the feature touched
     (gates.testChanged); the full suite runs once at the end and its verdict
     goes in the report. red there is loud, never quiet.
-  • every criterion is [auto] or [human] — never unclassified. anything a
-    test can't prove (a migration to run, a screen to look at) is [human]:
-    it stays in the contract, becomes a line in docs/ristretto/manual-checks.md,
-    and the feature still gets built, gated, reviewed and committed.
-  • blocked ≠ needs-human — a missing DECISION blocks (go refine it). something a
-    human must RUN OR LOOK AT becomes a "needs-human" close: the code is still
-    built and committed, and dependent features still brew. nothing stalls
-    a flight behind one alter table or one UI check.
+  • every criterion is [auto] or [human] — never unclassified. [human] means
+    ONE thing: this repo gave the agent no path to it. a migration the dev
+    stack applies is run; a screen the repo can drive is tested. only what
+    survives that — a console with no credential, a device that isn't here —
+    becomes a line in docs/ristretto/manual-checks.md. never production.
+  • three closing queues, three remedies. a missing DECISION blocks (go refine
+    it) and is the ONLY status that holds dependents back. something genuinely
+    OUT OF REACH closes "needs-human" (go run it). review findings still open
+    after 3 rounds close "needs-review" (go judge it) — built, committed,
+    gated green, never deleted. dependent features brew on through all three;
+    nothing stalls a flight behind one alter table or one open opinion.
+  • brew never stops the pot — 15 features means 15 attempted. where it must
+    settle a question the contract left open it takes the recommended reading
+    and says so loudly, rather than costing you the night.
   • independent review — before any commit, a fresh subagent that never saw
     the implementation judges the diff (bugs first, then lean). bugs must be
     fixed; 2 rounds (brew gets a 3rd on a stronger model), then it surfaces

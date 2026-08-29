@@ -34,8 +34,9 @@ Read `docs/ristretto/roadmap.md` before anything else. The roadmap is the source
 
 - If the target is **`blocked`**, surface the recorded reason and ask whether to proceed anyway — the block may have been resolved outside the roadmap.
 - If the target is **`needs-human`**, its code is already built and committed; what's outstanding is a manual step. Read its section in `docs/ristretto/manual-checks.md`. If every `proves` check there is ticked `- [x]`, this run is a **check re-run**: skip to step 9, prove the criteria that were pending, and close it `done` (step 11). If checks are still unticked, print them and stop — nothing to build.
+- If the target is **`needs-review`**, a `brew` built and committed it green but left review findings open after three rounds. This run is a **finding re-run**: read `## Open findings` in `docs/ristretto/plans/archived/<FEATURE-ID>.md`, and any `decision taken:` line in its `## Evidence` — that is a question `brew` answered on its own authority, and the first thing to confirm or overrule. Show them and ask which to fix; you are here and it is cheaper to ask than to guess. On your ruling, work them on a branch as an ordinary change, re-run the gates and the review, then rewrite `## Open findings` to only what remains — clearing it closes the row `done`. Findings you decide against are deleted with a one-line note saying so, never left to be rediscovered next month.
 
-**Resolving `next`:** pick the top `planned` row *whose plan's `Depends:` are all satisfied* — skip any feature still waiting on an unfinished prerequisite. A `Depends:` is satisfied by `done` **or** `needs-human`: a pending manual check means an environment step is outstanding, not that the prerequisite's code and `Provides:` are missing, so it must never hold up the features behind it. Only `blocked` does that. If every `planned` feature is blocked, stop and say so, naming what each is waiting on. When a **specific feature ID** was named (not `next`) and its `Depends:` aren't satisfied, don't silently skip — warn that a prerequisite is unfinished and ask whether to proceed anyway.
+**Resolving `next`:** pick the top `planned` row *whose plan's `Depends:` are all satisfied* — skip any feature still waiting on an unfinished prerequisite. A `Depends:` is satisfied by `done`, `needs-human` **or** `needs-review`: in all three the prerequisite's code is built, committed and gated green, and its `Provides:` are present — what is outstanding is a step to run or an opinion to judge, so none of them may hold up the features behind it. Only `blocked` does that. If every `planned` feature is blocked, stop and say so, naming what each is waiting on. When a **specific feature ID** was named (not `next`) and its `Depends:` aren't satisfied, don't silently skip — warn that a prerequisite is unfinished and ask whether to proceed anyway.
 
 ## 2. Read the plan
 
@@ -199,9 +200,18 @@ Dispatch one **planner** subagent (fresh context, capable model) with this brief
 > 4. Read the repo's house rules — `CLAUDE.md` / `AGENTS.md`, including any nested one near the files this will touch. They bind the plan even where the surrounding code doesn't demonstrate them yet; inferring conventions from code alone misses everything the repo decided but hasn't applied.
 > 5. Write `.ristretto/build/<FEATURE-ID>.md`: for each unit in `Contract.Units` (or the whole feature if `Units` is `—`) — exact file paths to create or modify, the real function/type names and signatures each unit produces and consumes, and the test cases that prove each acceptance criterion, as actual test code in this repo's test style.
 > 6. **No placeholders.** No "TBD", no "add error handling", no "similar to the above", no reference to a type or function no unit defines. Any of these means the plan is not finished.
-> 7. **Manual checks.** Some proofs a coding agent cannot produce: SQL against a live database, applying a migration to an environment, setting a secret, enabling something in a third-party console — and equally, anything that has to be *looked at* (does the dropdown open, does the mobile layout hold, does the copy read right). Take `Contract.Manual-Checks` as the starting list and **add any you find against the current code** — the column the Contract needs that the schema doesn't have, the env var nothing sets, the screen no test can judge. For each, record in the build plan: `proves` or `deploy`, **which acceptance criterion it proves**, where a human does it, and **the exact command, SQL, or thing to look at**, written against the code as you are planning it.
+> 7. **Manual checks — you are the one who decides these, and your default is that there are none.** A manual check exists for exactly one reason: **this repo gives you no path to the thing a criterion is about.** Not that the criterion involves a database, a screen, or an external service — those are subjects, and the subject decides nothing.
 >
->    A manual check is **not** a blocker. The code is still fully planned and built — plan the tests that need the live environment as skipped-pending tests (this repo's idiom: `test.skip`, `@pytest.mark.skip`, `@Ignore`) each naming the check that unblocks it, so they exist and run the moment it lands.
+>    Take `Contract.Manual-Checks` as a *hypothesis written before anyone read the code*, and settle each line against HEAD. You are the first actor in the chain who can actually check, so check:
+>    - **Is there a path?** Look for it in whatever form this stack takes: `docker-compose.yml`, a `Makefile` target, `package.json` scripts, Gradle/Maven tasks, Testcontainers, Alembic/Flyway/Liquibase, a `migrate`/`seed` command, a test harness that migrates on boot, fixtures, a `.env.example` carrying dev values, or a driver already in the dev dependencies — Playwright, Cypress, Selenium, `flutter_test`/`integration_test`, a snapshot harness. A prep line saying "apply the migration by hand" against a repo whose compose file runs migrations on boot is **wrong, and you delete it** — the criterion becomes `[auto]` and gets a real test.
+>    - **Can a test judge it?** If the repo can drive the UI, "does the dropdown open" is an ordinary test. Where nothing can render it, reason about the markup and the component before deferring to a person.
+>    - **Only what survives both** stays a check, and it names *what specifically* was out of reach — which credential, which console, which device. If you cannot name that, there is no check; there is a test you didn't write.
+>
+>    Adding a check prep didn't foresee is equally your job — the console this genuinely needs and nothing in the repo can reach. The direction doesn't matter; the evidence does. **Never write a check about production.** Rollout, prod backfill, key rotation, enabling a flag for real users: not yours, not the user's, not on the list.
+>
+>    For each surviving check record in the build plan: `proves`, **which acceptance criterion it proves**, what was out of reach, and **the exact command, SQL, or thing to look at**, written against the code as you are planning it.
+>
+>    A manual check is **not** a blocker. The code is still fully planned and built — plan the tests that need the unreachable thing as skipped-pending tests (this repo's idiom: `test.skip`, `@pytest.mark.skip`, `@Ignore`) each naming the check that unblocks it, so they exist and run the moment it lands.
 > 8. If the Contract cannot be satisfied against the current code — a criterion contradicts what's there, a `Consumes:` signature doesn't exist, a decision was never made — do **not** guess. Write nothing and return `blocked`. A missing manual check is never a reason to return `blocked`; a missing *decision* is.
 >
 > Final message, exactly one of:
@@ -216,25 +226,23 @@ On `blocked:`, stop the pull and set the roadmap row to `blocked` with that reas
 ```markdown
 # Manual Checks
 
-Steps ristretto can't run itself. Do one, tick its box, then re-run
+Things ristretto had no way to reach. Do one, tick its box, then re-run
 `/ristretto:pull <ID>` (or `/ristretto:brew`) to verify what was waiting on it.
-A `proves` check blocks only its own feature's remaining criteria — never other features.
+A check blocks only its own feature's remaining criteria — never other features.
+Every line names what was out of reach. Nothing here is ever about production.
 
 ## BREW-224 — user tiers
-- [ ] **proves** · criterion 2 · Supabase SQL editor (dev) · add the column the code reads
+- [ ] **proves** · criterion 2 · hosted Supabase project — no service-role key in this
+      environment, so the agent cannot apply this itself · add the column the code reads
       ```sql
       alter table profiles add column tier text not null default 'free';
       ```
       _criterion:_ "a free user sees the upgrade banner" · _test:_ `tier banner renders` (skipped)
-- [ ] **proves** · criterion 4 · your browser, 375px wide · the upgrade banner must not
-      overlap the nav on a narrow screen — look at it and tick if it holds
-- [ ] **deploy** · — · Supabase SQL editor (prod) · backfill existing rows
-      ```sql
-      update profiles set tier = 'pro' where id in (select user_id from subscriptions where active);
-      ```
 ```
 
-Keep the shape exactly — `- [ ] **proves|deploy** · criterion · where · what` — it's what later runs read to tell a done check from a pending one. A `proves` line always names the criterion it proves; a `deploy` line has no criterion, so it gets `—`. **A check with nothing to run is still a check**: "look at this and confirm" is exactly as valid as an `alter table`, and it is the kind the loop used to have no home for. Never tick a box yourself; that is the user's signature that the step really happened.
+Keep the shape exactly — `- [ ] **proves** · criterion · what was out of reach · what to do` — it's what later runs read to tell a done check from a pending one, and every line names the criterion it proves. **The third field is load-bearing**: it must name the specific thing that had no path from this repo — a missing credential, a hosted console, a physical device — and a line that can only say "a person should check this" is a test that didn't get written, so write the test instead. Never tick a box yourself; that is the user's signature that the step really happened.
+
+**One example is shown because one is a realistic number.** Most features add no lines to this file at all. If a run is producing several per feature, the reach test is not being applied — the repo almost certainly has a path to most of them.
 
 ## 6. Branch
 
@@ -301,7 +309,9 @@ Then act on the verdict — **capped at 2 rounds, never a ping-pong**:
 - **`review: clean`** → proceed to close.
 - **Findings** → fix **every `bug`** (mandatory); fix `lean` findings unless the fix is riskier than the win (state what you left in the summary). Re-run the gates.
 - **Round 2** (only if round 1 found bugs): dispatch a fresh reviewer to *verify the prior findings and any defect introduced by the fixes* — not to open new lean fronts.
-- **Bugs still open after round 2** → hard stop, mirroring the gate-retry rule: do **not** commit. Surface the findings to the user, leave the branch as it is, and disarm the gates (step 11.4).
+- **Bugs still open after round 2** → hard stop: do **not** commit. Surface the findings to the user, leave the branch as it is, and disarm the gates (step 11.4). **Leave the work in the tree — never `git restore` it.** The gates are green and the code works; what is unresolved is an opinion, and deleting a green tree over one is disproportionate. The branch is exactly where the user wants it while they decide.
+
+  **`pull` stops here where `brew` closes `needs-review`, and the difference is you.** You are at the keyboard: a question asked now is answered in seconds, so asking beats both guessing and parking. `brew` has nobody to ask at 3am, so it commits, records the findings, and moves on rather than costing you the rest of the pot.
 
 ## 11. Close — mandatory, automatic
 
@@ -319,7 +329,8 @@ Once criteria are met:
 3. Update the roadmap row: set Updated to today, append the files touched and the commit hash (or `uncommitted` if `nocommit`, plus `raw` if this was a raw pull), and set the status:
    - **`done`** — every acceptance criterion is proven.
    - **`needs-human`** — the code is built, committed, and gated, but at least one criterion is `pending human check`. The row's reason names the outstanding check and points at `manual-checks.md`. This is a *closing* status: the feature is finished as far as ristretto can take it, the plan is archived exactly as for `done`, and **it never holds up a dependent feature** — its `Provides:` exist in the code. Once you've run the check and ticked the box, `/ristretto:pull <ID>` re-checks the pending criteria and flips the row to `done`.
-   - Features with only `deploy` checks close as **`done`** — the check is a deploy step, not an unproven criterion. It stays on the checks list; that's what the list is for.
+   - **`needs-review`** — built, committed and gated green, with review findings still open. **`pull` never writes this status**; only `brew` does, because only `brew` runs with nobody to ask. It is listed here because `pull` can be pointed at such a row to resolve it — see step 1.
+   - Every check now proves a criterion, so there is no longer a class of check that closes `done` with lines outstanding. A feature with an unticked check is `needs-human`; a feature with none is `done`.
 4. **Disarm the gates:** delete `.ristretto/pulling` (and `.ristretto/gate-retries` if present). Do this even when a pull is aborted midway — a stale marker keeps gating sessions that aren't pulls.
 5. **Delete `.ristretto/build/<FEATURE-ID>.md`.** It was derived from (plan + HEAD) and is reproducible; keeping it would commit rot. Delete it on an aborted pull too.
 

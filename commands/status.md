@@ -1,6 +1,6 @@
 ---
 description: Print the project roadmap — a read-only view of what's planned, in progress, and done. Changes nothing.
-argument-hint: [optional filter: "open", "done", "blocked", "checks", a flight slug, or a feature ID]
+argument-hint: [optional filter: "open", "done", "blocked", "checks", "review", a flight slug, or a feature ID]
 ---
 
 You are running **STATUS**. This is **read-only** — do not create, modify, archive, or implement anything.
@@ -12,16 +12,18 @@ Filter (optional): $ARGUMENTS
 2. **Brew gauge.** Lead with a 10-segment gauge of done / total, filled proportionally (round to nearest segment), e.g.:
    `☕ [█████░░░░░] 5/10 brewed`
    If any feature is `needs-human`, add one line under it: `🔧 2 waiting on you — /ristretto:status checks`.
-3. Print a one-line count summary: planned / in-progress / blocked / needs-human / done.
+   If any feature is `needs-review`, add one line under it: `👀 3 waiting on your judgement — /ristretto:status review`.
+3. Print a one-line count summary: planned / in-progress / blocked / needs-human / needs-review / done.
 4. Print the roadmap rows. If a filter was given, show only matching rows:
-   - `open` → everything not `done` (a `needs-human` row is still open — its code is built, but a criterion is unproven)
+   - `open` → everything not `done` (a `needs-human` or `needs-review` row is still open — its code is built, but something is unproven or unjudged)
    - `done` → only `done`
    - `blocked` → only `blocked`, each with its recorded reason — this is the **refinement queue** after a `brew` run
    - `checks` → only `needs-human`, each with its outstanding step read from `docs/ristretto/manual-checks.md` (`- [ ]` items only) — this is the **do-it-yourself queue**, and a different job from refining a spec
+   - `review` → only `needs-review`, each with its `## Open findings` read from `docs/ristretto/plans/archived/<ID>.md` and any `decision taken:` line from its `## Evidence` — this is the **judgement queue**: the code is built and green, a reviewer still objects, and you decide. Show the `decision taken:` lines first and mark them `⚠` — a question `brew` answered on its own authority is the thing most worth a human's eye, and it is the only place in ristretto where that happens. Resolve one with `/ristretto:pull <ID>`.
    - a feature ID → just that row
    - a flight slug → only rows in that flight
 
-   If any rows carry a `Flight`, group the output by flight (standalone `—` rows last under "Other"). Within a group, a feature still waiting on an unfinished `Depends:` prerequisite gets a small `⏳` marker so it's clear why `pull next` would skip it — only a `blocked` prerequisite earns that marker, since `done` and `needs-human` both satisfy a dependency. A `needs-human` row itself gets a 🔧. Don't over-decorate — one marker, no analysis.
+   If any rows carry a `Flight`, group the output by flight (standalone `—` rows last under "Other"). Within a group, a feature still waiting on an unfinished `Depends:` prerequisite gets a small `⏳` marker so it's clear why `pull next` would skip it — only a `blocked` prerequisite earns that marker, since `done`, `needs-human` and `needs-review` all satisfy a dependency. A `needs-human` row itself gets a 🔧 and a `needs-review` row a 👀. Don't over-decorate — one marker, no analysis.
 5. If nothing matches the filter, say so plainly.
 6. **Milestone.** If every feature is `done` (gauge full), replace the gauge with a full celebratory cup:
    ```
