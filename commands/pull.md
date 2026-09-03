@@ -299,7 +299,7 @@ Dispatch one subagent (general-purpose, fresh context) with this brief verbatim,
 > You are the independent REVIEW gate for ristretto feature **<FEATURE-ID>**. You did not write this code — judge it cold. Read `docs/ristretto/plans/<FEATURE-ID>.md` (`## Contract` is the contract), the repo's `CLAUDE.md` / `AGENTS.md` if present (the house rules — treat them as binding on the changed files), and the feature's diff: <files touched / branch vs merge-base>. You change no files. Do not run the gates: another run may hold the lock, and yours would either wait or measure a tree someone else is measuring.
 >
 > Three buckets, priority order:
-> 1. **`block`** — the shipped product misbehaves: an acceptance criterion genuinely not satisfied, data loss or corruption, a security hole, a documented house rule the diff violates, an unhandled edge case a user can actually reach on a changed path.
+> 1. **`block`** — the shipped product misbehaves: an acceptance criterion genuinely not satisfied, a `[human]` criterion silently treated as proven, data loss or corruption, a security hole, a documented house rule the diff violates, an unhandled edge case a user can actually reach on a changed path.
 > 2. **`note`** — the product is right, but the proof is weaker than it claims: a test that passes vacuously, a docblock that overstates what is proven, a criterion proven by proxy without saying so, a changed path with no coverage.
 > 3. **`lean`** — tamp's facets: runtime waste (N+1, hoistable work), duplication vs utilities that already exist in this repo, dead/over-built code, readability drag.
 >
