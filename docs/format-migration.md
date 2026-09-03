@@ -95,6 +95,12 @@ meaning, and worse than leaving the feature off.
 
 4. **The `needs-review` status is additive** — nothing on disk changes. No existing row can be one, and `brew` writes them from now on.
 
+### → 0.16 — features carry a tier
+
+1. **Roadmap table:** add a `Tier` column between `Title` and `Status`, in both the header row and the separator row beneath it.
+2. **Every existing row gets `normal`.** This is not a judgement, and you must not make one: `normal` is exactly the behaviour every existing row already had, so a migrated project builds identically to how it built yesterday. Never infer `easy` from a row's title, size, or status — inferring would be deciding something, which a migration may not do.
+3. Nothing else changes. No plan file is touched, no status reinterpreted, no criterion reclassified.
+
 ## 3. Stamp, report, and carry on
 
 ```

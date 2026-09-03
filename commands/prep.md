@@ -31,13 +31,14 @@ If `roadmap.md` is new, start it with this table:
 # Ristretto Roadmap
 <!-- ristretto-format: x.y -->
 
-| Flight | Feature | Title | Status | Plan | Updated |
-|--------|---------|-------|--------|------|---------|
+| Flight | Feature | Title | Tier | Status | Plan | Updated |
+|--------|---------|-------|------|--------|------|---------|
 ```
 
 Don't write the stamp by hand — create the roadmap, then run `node "${CLAUDE_PLUGIN_ROOT}/scripts/version.js" stamp`, which fills in the version this plugin actually is. A hand-typed version is a guess, and a wrong one sends the next command into a migration the project doesn't need.
 
 Status values: `planned` · `in-progress` · `blocked` · `needs-human` · `needs-review` · `done`.
+Tier values: `easy` · `normal`. `normal` is the default and is what every feature got before 0.16.
 `blocked` is set by `pull`/`brew` when a feature can't proceed without a **decision** — the row carries a one-line reason. Re-prepping a `blocked` feature (refining its plan to resolve the reason) flips it back to `planned`.
 `needs-human` means the opposite kind of stuck: the spec is fine and the code is built, but the repo gave the agent **no path to something a criterion needs** (see *Manual checks* below). It is a closing status, not a blocking one.
 `needs-review` is the third kind: the code is built, committed and gated **green**, but review findings are still open after three rounds. Nothing is wrong with the spec and nothing is unreachable — a reviewer simply still objects, and a person should judge it. Also a closing status. Only `brew` writes it; `pull` runs with you present, so it surfaces the findings to you instead.
