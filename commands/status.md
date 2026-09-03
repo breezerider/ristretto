@@ -1,6 +1,6 @@
 ---
 description: Print the project roadmap — a read-only view of what's planned, in progress, and done. Changes nothing.
-argument-hint: [optional filter: "open", "done", "blocked", "checks", "review", a flight slug, or a feature ID]
+argument-hint: [optional filter: "open", "done", "blocked", "checks", "review", "easy", a flight slug, or a feature ID]
 ---
 
 You are running **STATUS**. This is **read-only** — do not create, modify, archive, or implement anything.
@@ -20,10 +20,13 @@ Filter (optional): $ARGUMENTS
    - `blocked` → only `blocked`, each with its recorded reason — this is the **refinement queue** after a `brew` run
    - `checks` → only `needs-human`, each with its outstanding step read from `docs/ristretto/manual-checks.md` (`- [ ]` items only) — this is the **do-it-yourself queue**, and a different job from refining a spec
    - `review` → only `needs-review`, each with its `## Open findings` read from `docs/ristretto/plans/archived/<ID>.md` and any `decision taken:` line from its `## Evidence` — this is the **judgement queue**: the code is built and green, a reviewer still objects, and you decide. Show the `decision taken:` lines first and mark them `⚠` — a question `brew` answered on its own authority is the thing most worth a human's eye, and it is the only place in ristretto where that happens. Resolve one with `/ristretto:pull <ID>`.
+   - `easy` → only rows whose `Tier` is `easy`
    - a feature ID → just that row
    - a flight slug → only rows in that flight
 
    If any rows carry a `Flight`, group the output by flight (standalone `—` rows last under "Other"). Within a group, a feature still waiting on an unfinished `Depends:` prerequisite gets a small `⏳` marker so it's clear why `pull next` would skip it — only a `blocked` prerequisite earns that marker, since `done`, `needs-human` and `needs-review` all satisfy a dependency. A `needs-human` row itself gets a 🔧 and a `needs-review` row a 👀. Don't over-decorate — one marker, no analysis.
+
+   Show each row's `Tier`. Mark an `easy` row plainly (e.g. a trailing `· easy`); leave `normal` unmarked, since it is the default and marking it would be noise on every row. A row that escalated reads `normal` — the ratchet rewrote it — and its `## Evidence` records what it escalated from.
 5. If nothing matches the filter, say so plainly.
 6. **Milestone.** If every feature is `done` (gauge full), replace the gauge with a full celebratory cup:
    ```

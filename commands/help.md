@@ -17,7 +17,7 @@ THE WORKFLOW
                                     fast by default; escalates into roast mode
                                     when a criterion can't be made checkable.
                                     "deep" forces the roast.
-  3. /ristretto:brew                brew the whole pot: implements every
+  3. /ristretto:brew [easy]         brew the whole pot: implements every
                                     eligible feature unattended, one gated
                                     commit each, on feature/brew-<date>.
                                     planner → implementer → reviewer → closer,
@@ -27,6 +27,7 @@ THE WORKFLOW
                                     scoped tests during the loop, full suite once
                                     at the end.
      …or /ristretto:pull <ID|next>  pull exactly one feature, human between shots.
+        [nocommit] [easy]
      …or /ristretto:pull <ID> raw   ungated spike: no gates, no red-first, no
                                     review. labelled "raw" on the record forever.
   4. /ristretto:status blocked      your refinement queue after a brew —
@@ -90,6 +91,12 @@ HOUSE RULES
   • brew never stops the pot — 15 features means 15 attempted. where it must
     settle a question the contract left open it takes the recommended reading
     and says so loudly, rather than costing you the night.
+  • tiers — a feature is "normal" (plan, build, review, close) or "easy",
+    which skips the planner only. easy is a claim about the contract being
+    concrete, not about the ticket being small. any agent may escalate
+    easy → normal; nothing ever lowers a tier. "brew easy" forces every
+    feature easy and records what would have escalated — an experiment,
+    labelled forever. gates and review never change with the tier.
   • independent review — before any commit, a fresh subagent that never saw
     the implementation judges the diff into block / note / lean. only a
     block (the product actually misbehaves) costs a round; notes and leans
