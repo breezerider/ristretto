@@ -58,7 +58,7 @@ HOUSE RULES
     prep (roast mode roasts them out), so a question at 3am is a prep bug.
     brew goes as far as it possibly can, every time.
   • your house rules bind — CLAUDE.md / AGENTS.md is read when planning and
-    implementing, and a rule the diff violates is a "bug" finding in review.
+    implementing, and a rule the diff violates is a "block" finding in review.
     ristretto reads it; it never writes to it.
   • the plan splits in two — the ## Contract is durable and deep; the
     directions are generated against HEAD at pull time into
@@ -91,10 +91,12 @@ HOUSE RULES
     settle a question the contract left open it takes the recommended reading
     and says so loudly, rather than costing you the night.
   • independent review — before any commit, a fresh subagent that never saw
-    the implementation judges the diff (bugs first, then lean). bugs must be
-    fixed; 2 rounds (brew gets a 3rd on a stronger model), then it surfaces
-    instead of looping. trivial diffs skip. round 2 can be scoped down to a
-    confirmation pass — never to nothing. a fix is code no one reviewed yet.
+    the implementation judges the diff into block / note / lean. only a
+    block (the product actually misbehaves) costs a round; notes and leans
+    ride along a round already happening, else they go in the plan. 2
+    rounds (brew gets a 3rd on a stronger model), then it surfaces instead
+    of looping. trivial diffs skip. round 2 confirms the blocks and what
+    the fixer broke — never nothing. a fix is code no one reviewed yet.
   • skip, never guess — undecidable → blocked with the spec gap named.
   • git: feature branches, one commit per feature, NEVER pushes. reviewing
     and pushing is yours.
