@@ -27,7 +27,7 @@ THE WORKFLOW
                                     scoped tests during the loop, full suite once
                                     at the end.
      …or /ristretto:pull <ID|next>  pull exactly one feature, human between shots.
-        [nocommit] [easy]
+        [nocommit]                  its tier comes from the roadmap row.
   4. /ristretto:status blocked      your refinement queue after a brew —
                                     each row names its spec gap. refine via
                                     prep (flips it back to planned), re-brew.

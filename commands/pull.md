@@ -1,21 +1,13 @@
 ---
 description: Pull one feature from the roadmap and implement it cleanly in auto mode against the current code, then commit on a feature branch and close it. Pass "nocommit" to skip committing.
-argument-hint: <feature ID, or "next"> [nocommit] [easy]
+argument-hint: <feature ID, or "next"> [nocommit]
 ---
 
 You are in the **PULL** phase of ristretto. You implement exactly one feature, directly, in auto mode — there is no approval gate. Closing the feature is **your** job at the end, never the user's.
 
 Target: $ARGUMENTS  (a feature ID, or `next` = the top `planned` row in the roadmap; add `nocommit` to skip the commit at the end)
 
-## `easy` — the forced-easy experiment lane
-
-`easy` treats **every** eligible feature as `easy`, whatever its `Tier` cell says. It exists to measure the tier design rather than argue about it.
-
-- **It rewrites nothing.** The roadmap's `Tier` cells are left exactly as `prep` set them. A run that edited them would destroy the ability to run the comparison a second time, and would quietly launder an experiment into a data change.
-- **The implementer runs on the capable model.** This is not an exception to the model rule but that rule applied honestly: the model tracks how much thinking the build plan already did, and under `easy` there is no build plan at all — the implementer plans and builds in one pass, which is the most demanding job in the loop, not the least.
-- **Escalation is recorded and then ignored.** On any of the five triggers, write `would-escalate: <trigger>` into the result and **build anyway, without a plan.** Escalating normally would send every hard feature down the `normal` path and leave nothing to compare; stopping would leave features unbuilt. Recording-and-continuing is the only arm that produces both halves — a census of which tickets were genuinely easy, and an outcome for the ones that weren't.
-- **Labelled forever.** `## Evidence` records `tier: easy (forced)` and every `would-escalate:` line verbatim; the roadmap row is appended with `easy`. Work built under an experiment must stay identifiable long after the experiment is forgotten.
-- **Gates and review are untouched**, which is what makes this safe to run: the worst outcome is not unproven code but more blocks found and more rounds spent — and that is the measurement. A forced-easy run can never produce a green row over code no gate and no reviewer ever saw.
+**The feature's tier comes from its roadmap row, and there is no argument that overrides it.** `pull` runs one feature, so it has no experiment to run: the forced-easy lane is `brew easy`, where a batch produces a ratio worth measuring. To pull a single feature down the easy path, its row says `easy` — set there by `prep`, which had the contract in front of it. See step 5.
 
 ## 0. Check the project's format version — before anything else
 
@@ -193,8 +185,7 @@ The plan holds the destination. This step writes the directions — **now**, aga
 **Read the feature's `Tier` from its roadmap row first.**
 
 - `normal`, or no `Tier` cell at all → dispatch the planner exactly as below.
-- `easy` → **skip the planner entirely.** The contract is the build plan. Expand it inline in this context: read the current code in the touchpoint areas, find the utilities, patterns and test conventions this repo already uses, and settle the exact file paths, the real names and signatures, and the test cases that prove each criterion — before writing anything. Nothing is written to `.ristretto/build/`. **Everything else in this command is unchanged**: the gates stay armed, the tests still go red first, the review still runs, the closer still closes.
-- The `easy` argument was passed → every feature is treated as `easy` regardless of its row. See **`easy` — the forced-easy experiment lane** above.
+- `easy` → **skip the planner entirely.** The contract is the build plan. Expand it inline in this context: read the current code in the touchpoint areas, find the utilities, patterns and test conventions this repo already uses, and settle the exact file paths, the real names and signatures, and the test cases that prove each criterion — before writing anything. Nothing is written to `.ristretto/build/`, so **steps 7 and 8 work from what you settled here** rather than from a file. **Everything else in this command is unchanged**: the gates stay armed, the tests still go red first, the review still runs, the close is the same.
 
 **The ratchet — escalate, never lower.** While expanding an `easy` contract inline, stop **before writing any code** and escalate to `normal` if any of these is true:
 
@@ -204,7 +195,7 @@ The plan holds the destination. This step writes the directions — **now**, aga
 4. it spans more than three files;
 5. any acceptance criterion is `[human]`.
 
-To escalate: flip the row's `Tier` to `normal`, dispatch the planner as below, and have the closer record `escalated from easy: <trigger>` in the plan's `## Evidence`. **Nothing may ever lower a tier** — not this command, not a subagent, not a later run. An upfront label is an estimate made before anyone read the code, and this repo has receipts on those being optimistic; the ratchet is what makes being wrong cost minutes instead of a broken feature.
+To escalate: flip the row's `Tier` to `normal`, dispatch the planner as below, and record `escalated from easy: <trigger>` in the plan's `## Evidence` when you close (step 11.2). **Nothing may ever lower a tier** — not this command, not a subagent, not a later run. An upfront label is an estimate made before anyone read the code, and this repo has receipts on those being optimistic; the ratchet is what makes being wrong cost minutes instead of a broken feature.
 
 Dispatch one **planner** subagent (fresh context, capable model) with this brief verbatim.
 
@@ -237,7 +228,9 @@ Dispatch one **planner** subagent (fresh context, capable model) with this brief
 
 On `blocked:`, stop the pull and set the roadmap row to `blocked` with that reason (disarm the gates first — step 11.4). No branch was created, so there is nothing to clean up. On `planned:`, continue — steps 7 and 8 work from `.ristretto/build/<FEATURE-ID>.md`, not from the plan's `## Approach`.
 
-**If the build plan carries manual checks, write them to `docs/ristretto/manual-checks.md` now** (create the file with the header below if missing), appending or replacing this feature's `##` section. Manual checks are the one place ristretto writes literal commands — they are for a human to run, not for the repo:
+**Either way, steps 7 and 8 work from the expansion, never from the `## Approach`** — the build plan on the `normal` path, what you settled inline on the `easy` one. Below, "the build plan" means whichever of the two you have.
+
+**If the expansion carries manual checks, write them to `docs/ristretto/manual-checks.md` now** (create the file with the header below if missing), appending or replacing this feature's `##` section. Manual checks are the one place ristretto writes literal commands — they are for a human to run, not for the repo:
 
 ```markdown
 # Manual Checks
@@ -280,7 +273,7 @@ If the repo has a test gate, the build plan's test cases become tests **before a
 
 ## 8. Implement the build plan
 
-`.ristretto/build/<FEATURE-ID>.md` was written against the current code minutes ago; the `## Contract` behind it is the acceptance contract. Implement the plan; do not re-plan.
+The build plan was written against the current code minutes ago — by the planner into `.ristretto/build/<FEATURE-ID>.md` on the `normal` path, or by you inline in step 5 on the `easy` one. The `## Contract` behind it is the acceptance contract. Implement the plan; **do not re-plan** — on `easy` that means step 5's expansion is settled, not a first draft to reopen now that the code is in front of you.
 
 - Follow the build plan's file paths, names, and signatures. Reuse the existing patterns and utilities it identified.
 - You're done implementing when the red tests from step 7 pass and every acceptance criterion in the Contract holds.
@@ -352,14 +345,14 @@ Once criteria are met:
    - **If the summary genuinely needs those characters, or spans more than one line:** write the message to a file and commit with `git commit -F <path>`, then delete the file. Do **not** reach for a heredoc — it is unreliable in this environment.
    - **Never** repair a bad message with `--amend`. If a message came out wrong, that is worth reporting; rewriting history is not on the table.
    - **Never** push, set an upstream, `--force`, reset, or open a PR. Local and append-only. `--amend` has exactly one legal use: fixing the message of the commit you just made, when nothing has been committed since — say so when you use it. Never amend to change content, and never amend a commit you didn't just create.
-2. **Correct `Provides:` to whatever was actually built**, then append an `## Evidence` section to the plan (the proof from step 9, a one-line gate summary like `gates: lint ✓ typecheck ✓ test ✓`, and the review verdict **with the rounds it took** — `review: clean (1 round)`, `review: notes-only — 3 open (1 round)`, `review: 4 blocks resolved in 2 rounds`, or `review: skipped (trivial diff)`), then move `docs/ristretto/plans/<FEATURE-ID>.md` → `docs/ristretto/plans/archived/<FEATURE-ID>.md`. A `Provides:` that drifted during implementation and was never corrected poisons every dependent feature — the archived plan is what the next feature's planner reads as fact.
+2. **Correct `Provides:` to whatever was actually built**, then append an `## Evidence` section to the plan (the proof from step 9, a one-line gate summary like `gates: lint ✓ typecheck ✓ test ✓`, and the review verdict **with the rounds it took** — `review: clean (1 round)`, `review: notes-only — 3 open (1 round)`, `review: 4 blocks resolved in 2 rounds`, or `review: skipped (trivial diff)`), then move `docs/ristretto/plans/<FEATURE-ID>.md` → `docs/ristretto/plans/archived/<FEATURE-ID>.md`. **Where the feature ran the easy path, `## Evidence` also records `tier: easy`** — and `escalated from easy: <trigger>` where the ratchet fired in step 5. A tier is a claim about the contract that the build just tested; the archived plan is the only place that result survives. A `Provides:` that drifted during implementation and was never corrected poisons every dependent feature — the archived plan is what the next feature's planner reads as fact.
 3. Update the roadmap row: set Updated to today, append the files touched and the commit hash (or `uncommitted` if `nocommit`), and set the status:
    - **`done`** — every acceptance criterion is proven.
    - **`needs-human`** — the code is built, committed, and gated, but at least one criterion is `pending human check`. The row's reason names the outstanding check and points at `manual-checks.md`. This is a *closing* status: the feature is finished as far as ristretto can take it, the plan is archived exactly as for `done`, and **it never holds up a dependent feature** — its `Provides:` exist in the code. Once you've run the check and ticked the box, `/ristretto:pull <ID>` re-checks the pending criteria and flips the row to `done`.
    - **`needs-review`** — built, committed and gated green, with review findings still open. **`pull` never writes this status**; only `brew` does, because only `brew` runs with nobody to ask. It is listed here because `pull` can be pointed at such a row to resolve it — see step 1.
    - Every check now proves a criterion, so there is no longer a class of check that closes `done` with lines outstanding. A feature with an unticked check is `needs-human`; a feature with none is `done`.
 4. **Disarm the gates:** delete `.ristretto/pulling` (and `.ristretto/gate-retries` if present). Do this even when a pull is aborted midway — a stale marker keeps gating sessions that aren't pulls.
-5. **Delete `.ristretto/build/<FEATURE-ID>.md`.** It was derived from (plan + HEAD) and is reproducible; keeping it would commit rot. Delete it on an aborted pull too.
+5. **Delete `.ristretto/build/<FEATURE-ID>.md`.** It was derived from (plan + HEAD) and is reproducible; keeping it would commit rot. Delete it on an aborted pull too. On the `easy` path there is no such file — nothing to delete, and its absence is not a sign something went wrong.
 
 The file's location is the status. Archiving **is** closing — so it always happens here, and the user never has to remember.
 
