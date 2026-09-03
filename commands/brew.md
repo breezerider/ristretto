@@ -144,7 +144,12 @@ While an eligible feature exists:
    > `ready: <FEATURE-ID> — <files touched> — <red→green test names, or how criteria were proven>`
    > `needs-human: <FEATURE-ID> — <files touched> — <criteria proven> — pending: <the check, one line>`
    > `blocked: <FEATURE-ID> — <spec gap>`
+   > `escalate: <FEATURE-ID> — <which trigger, one line>`
    > followed by at most 3 short lines. Nothing else — your full reasoning dies with you; only this summary survives.
+   >
+   > **`escalate:` is available only on an `easy` feature, and it is not a failure.** It means the contract you were handed is not concrete enough to build from without a planner — one of the five ratchet triggers above. Return it *before writing any code*; the orchestrator will have a planner write a real build plan and hand it to a fresh implementer. **Never reach for `blocked:` instead**: `blocked` means a spec gap no one can build from and it holds back every feature that depends on this one, whereas an escalation is just a tier label that was optimistic. Confusing the two costs the whole flight behind you.
+   >
+   > **Under forced-easy (`brew easy`) there is no `escalate:`.** You return `ready:` or `needs-human:` exactly as normal, and put `would-escalate: <trigger>` in your trailing lines instead — then build it anyway, without a plan. That line is the measurement the run exists to produce, so never omit it and never soften it.
 
    A `needs-human:` result continues exactly like `ready:` — review, then close. The only difference is the status the closer writes.
 
