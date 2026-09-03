@@ -167,7 +167,13 @@ Keep it light: only add `Depends:` where a real prerequisite exists. Most featur
 
 6. **Check `Consumes:` against `Provides:`.** When feature B lists A in `Depends:`, B's `Consumes:` must be a subset of A's `Provides:`. Check this at prep time and say so if it isn't — a mismatch here is the cheapest bug you will ever fix. Read A's plan wherever it lives, `plans/` or `plans/archived/`.
 
-7. **Add or update one row** in `roadmap.md` for the feature — fill the `Flight` cell with its slug (or `—`).
+7. **Add or update one row** in `roadmap.md` for the feature — fill the `Flight` cell with its slug (or `—`), and the `Tier` cell with `normal` or `easy`.
+
+   **`easy` is a claim about the contract, not about the ticket.** It means: this contract is already concrete enough that a planner subagent would add nothing to it — the file paths, the real names and signatures, and the shape of the tests that prove each criterion are all decided here. A feature is not `easy` because it feels small or sounds quick; it is `easy` because its contract is finished. That makes the label checkable by reading the contract, rather than a feeling about the ticket.
+
+   Note what follows: an `easy` label makes **your** job harder, not easier. With no planner to expand the contract into file paths and signatures, the contract itself has to carry them.
+
+   **Write `easy` only with a reason**, as a `Tier: easy — <one clause>` line at the top of the plan's `## Approach`. `normal` is the default and needs no justification. The asymmetry is deliberate and is the same device the review's `note` findings use: the optimistic label is the cheap one, so it should cost a sentence. **When torn, write `normal`** — the ratchet only ever escalates, so an under-optimistic label costs nothing but a planner you would have run anyway, while an over-optimistic one costs an implementer stopping mid-flight.
 
 ## Hard rules
 
