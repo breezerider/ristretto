@@ -3,7 +3,7 @@ description: The one-off door into the easy tier — prep and pull one small fea
 argument-hint: <one feature: ID + description, or pasted text> [nocommit]
 ---
 
-You are running **SHOT** — the one-off door into the **`easy` tier**: prep and pull one small feature in a single pass, with no roadmap row needed beforehand. `easy` means the contract is concrete enough that no planner subagent would add anything to it, which is exactly what shot has always done inline at step 4. Everything else still runs: the gates are armed, the tests go red first, the review judges the diff, the closer closes. For a lane with no proof at all, that is `raw`. For anything with real scope, use `/ristretto:prep` then `/ristretto:pull`.
+You are running **SHOT** — the one-off door into the **`easy` tier**: prep and pull one small feature in a single pass, with no roadmap row needed beforehand. `easy` means the contract is concrete enough that no planner subagent would add anything to it, which is exactly what shot has always done inline at step 4. Everything else still runs: the gates are armed, the tests go red first, the review judges the diff, the closer closes. For anything with real scope, use `/ristretto:prep` then `/ristretto:pull`.
 
 Feature: $ARGUMENTS  (add `nocommit` to skip the commit at the end)
 

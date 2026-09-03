@@ -28,8 +28,6 @@ THE WORKFLOW
                                     at the end.
      …or /ristretto:pull <ID|next>  pull exactly one feature, human between shots.
         [nocommit] [easy]
-     …or /ristretto:pull <ID> raw   ungated spike: no gates, no red-first, no
-                                    review. labelled "raw" on the record forever.
   4. /ristretto:status blocked      your refinement queue after a brew —
                                     each row names its spec gap. refine via
                                     prep (flips it back to planned), re-brew.

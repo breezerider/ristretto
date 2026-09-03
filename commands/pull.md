@@ -1,21 +1,11 @@
 ---
-description: Pull one feature from the roadmap and implement it cleanly in auto mode against the current code, then commit on a feature branch and close it. Pass "nocommit" to skip committing, or "raw" for an ungated spike (no gates, no red-first, no review).
-argument-hint: <feature ID, or "next"> [nocommit] [raw] [easy]
+description: Pull one feature from the roadmap and implement it cleanly in auto mode against the current code, then commit on a feature branch and close it. Pass "nocommit" to skip committing.
+argument-hint: <feature ID, or "next"> [nocommit] [easy]
 ---
 
 You are in the **PULL** phase of ristretto. You implement exactly one feature, directly, in auto mode — there is no approval gate. Closing the feature is **your** job at the end, never the user's.
 
 Target: $ARGUMENTS  (a feature ID, or `next` = the top `planned` row in the roadmap; add `nocommit` to skip the commit at the end)
-
-## `raw` — the ungated lane
-
-`raw` executes the plan and nothing else: no gates armed, no planner subagent, no red-first tests, no review. It exists for spikes, prototypes, and throwaway branches where the ceremony costs more than it returns — **not** for code you intend to keep.
-
-When `raw` is passed: skip step 3 (no marker, so the hooks stay disarmed — the format hook still runs), do step 5 inline in this context instead of dispatching a planner, skip step 7, and skip step 10 entirely. Everything else holds: the Contract is still the contract, you still verify the criteria yourself in step 9, and you still close properly in step 11.
-
-**Raw work is labelled as raw, always.** The `## Evidence` section records `gates: skipped (raw)` and `review: skipped (raw)`, and the roadmap row is appended with `raw`. Ungated code that looks gated on the roadmap is worse than no fast lane at all — you must be able to tell, months later, which commits nothing ever checked. Say so in the final summary too.
-
-Everything below assumes a normal pull unless it says otherwise.
 
 ## `easy` — the forced-easy experiment lane
 
@@ -24,7 +14,7 @@ Everything below assumes a normal pull unless it says otherwise.
 - **It rewrites nothing.** The roadmap's `Tier` cells are left exactly as `prep` set them. A run that edited them would destroy the ability to run the comparison a second time, and would quietly launder an experiment into a data change.
 - **The implementer runs on the capable model.** This is not an exception to the model rule but that rule applied honestly: the model tracks how much thinking the build plan already did, and under `easy` there is no build plan at all — the implementer plans and builds in one pass, which is the most demanding job in the loop, not the least.
 - **Escalation is recorded and then ignored.** On any of the five triggers, write `would-escalate: <trigger>` into the result and **build anyway, without a plan.** Escalating normally would send every hard feature down the `normal` path and leave nothing to compare; stopping would leave features unbuilt. Recording-and-continuing is the only arm that produces both halves — a census of which tickets were genuinely easy, and an outcome for the ones that weren't.
-- **Labelled forever, like `raw`.** `## Evidence` records `tier: easy (forced)` and every `would-escalate:` line verbatim; the roadmap row is appended with `easy`. Work built under an experiment must stay identifiable long after the experiment is forgotten.
+- **Labelled forever.** `## Evidence` records `tier: easy (forced)` and every `would-escalate:` line verbatim; the roadmap row is appended with `easy`. Work built under an experiment must stay identifiable long after the experiment is forgotten.
 - **Gates and review are untouched**, which is what makes this safe to run: the worst outcome is not unproven code but more blocks found and more rounds spent — and that is the measurement. A forced-easy run can never produce a green row over code no gate and no reviewer ever saw.
 
 ## 0. Check the project's format version — before anything else
@@ -54,7 +44,7 @@ Open `docs/ristretto/plans/<FEATURE-ID>.md`. **`## Contract` is binding** — ac
 
 ## 3. Arm the gates
 
-The plugin ships deterministic gate hooks: while a pull is active, a Stop hook runs the repo's lint + typecheck + test and blocks you (exit 2) until they're green — enforced, not self-reported. (Skip this whole step under `raw`.)
+The plugin ships deterministic gate hooks: while a pull is active, a Stop hook runs the repo's lint + typecheck + test and blocks you (exit 2) until they're green — enforced, not self-reported.
 
 1. **Read `.ristretto.json` — create it if missing, and complete it if it predates a key.**
 
@@ -203,7 +193,7 @@ The plan holds the destination. This step writes the directions — **now**, aga
 **Read the feature's `Tier` from its roadmap row first.**
 
 - `normal`, or no `Tier` cell at all → dispatch the planner exactly as below.
-- `easy` → **skip the planner entirely.** The contract is the build plan. Expand it inline in this context, the way `raw` does: read the current code in the touchpoint areas, find the utilities, patterns and test conventions this repo already uses, and settle the exact file paths, the real names and signatures, and the test cases that prove each criterion — before writing anything. Nothing is written to `.ristretto/build/`. **Everything else in this command is unchanged**: the gates stay armed, the tests still go red first, the review still runs, the closer still closes.
+- `easy` → **skip the planner entirely.** The contract is the build plan. Expand it inline in this context: read the current code in the touchpoint areas, find the utilities, patterns and test conventions this repo already uses, and settle the exact file paths, the real names and signatures, and the test cases that prove each criterion — before writing anything. Nothing is written to `.ristretto/build/`. **Everything else in this command is unchanged**: the gates stay armed, the tests still go red first, the review still runs, the closer still closes.
 - The `easy` argument was passed → every feature is treated as `easy` regardless of its row. See **`easy` — the forced-easy experiment lane** above.
 
 **The ratchet — escalate, never lower.** While expanding an `easy` contract inline, stop **before writing any code** and escalate to `normal` if any of these is true:
@@ -216,7 +206,7 @@ The plan holds the destination. This step writes the directions — **now**, aga
 
 To escalate: flip the row's `Tier` to `normal`, dispatch the planner as below, and have the closer record `escalated from easy: <trigger>` in the plan's `## Evidence`. **Nothing may ever lower a tier** — not this command, not a subagent, not a later run. An upfront label is an estimate made before anyone read the code, and this repo has receipts on those being optimistic; the ratchet is what makes being wrong cost minutes instead of a broken feature.
 
-Dispatch one **planner** subagent (fresh context, capable model) with this brief verbatim. Under `raw`, do this yourself in this context instead — no subagent, no `.ristretto/build/` file.
+Dispatch one **planner** subagent (fresh context, capable model) with this brief verbatim.
 
 > You are the PLANNER for ristretto feature **<FEATURE-ID>**. You write no implementation code and modify no source file.
 >
@@ -308,7 +298,7 @@ Check the result against each acceptance criterion. **Run the full suite once, n
 node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.js" verify
 ```
 
-`verify` runs lint + typecheck + the *whole* test gate, ignoring both the scoped-test shortcut the loop uses and the green-tree cache. This is the run that proves nothing elsewhere in the repo broke; the scoped runs during implementation only ever proved the feature's own files. Fix until it's green — it exits 0 green, 1 red, and prints a `gates: lint ✓ typecheck ✓ test ✓` summary you'll reuse in the Evidence. Under `raw`, skip this and say so.
+`verify` runs lint + typecheck + the *whole* test gate, ignoring both the scoped-test shortcut the loop uses and the green-tree cache. This is the run that proves nothing elsewhere in the repo broke; the scoped runs during implementation only ever proved the feature's own files. Fix until it's green — it exits 0 green, 1 red, and prints a `gates: lint ✓ typecheck ✓ test ✓` summary you'll reuse in the Evidence.
 
 If a gate was killed as **hung** (it stopped printing) rather than failing, the work is unverified, not proven broken: don't commit on the strength of a hang. Find what it's waiting on — an open handle, a port, watch mode, a prompt — or raise that gate's `silence` budget if the tool is simply quiet for long stretches. Then verify again.
 
@@ -318,7 +308,7 @@ Then write down the **Evidence**: for each criterion, *how* it was proven — te
 
 Gates prove the tests pass; they can't prove the code is right or lean. Before committing, the diff gets an **independent review** by a fresh subagent that never saw your implementation reasoning.
 
-**Skip only when the diff is trivial**: roughly < 15 changed lines *and* no new logic (no new functions, branches, or loops — renames, copy, config tweaks). When in doubt, review. Under `raw`, skip this step entirely — that's what `raw` buys, and what the `review: skipped (raw)` label on the record costs.
+**Skip only when the diff is trivial**: roughly < 15 changed lines *and* no new logic (no new functions, branches, or loops — renames, copy, config tweaks). When in doubt, review.
 
 Dispatch one subagent (general-purpose, fresh context) with this brief verbatim, filling in the ID and the diff scope:
 
@@ -362,8 +352,8 @@ Once criteria are met:
    - **If the summary genuinely needs those characters, or spans more than one line:** write the message to a file and commit with `git commit -F <path>`, then delete the file. Do **not** reach for a heredoc — it is unreliable in this environment.
    - **Never** repair a bad message with `--amend`. If a message came out wrong, that is worth reporting; rewriting history is not on the table.
    - **Never** push, set an upstream, `--force`, reset, or open a PR. Local and append-only. `--amend` has exactly one legal use: fixing the message of the commit you just made, when nothing has been committed since — say so when you use it. Never amend to change content, and never amend a commit you didn't just create.
-2. **Correct `Provides:` to whatever was actually built**, then append an `## Evidence` section to the plan (the proof from step 9, a one-line gate summary like `gates: lint ✓ typecheck ✓ test ✓`, and the review verdict **with the rounds it took** — `review: clean (1 round)`, `review: notes-only — 3 open (1 round)`, `review: 4 blocks resolved in 2 rounds`, `review: skipped (trivial diff)`, or `review: skipped (raw)`), then move `docs/ristretto/plans/<FEATURE-ID>.md` → `docs/ristretto/plans/archived/<FEATURE-ID>.md`. A `Provides:` that drifted during implementation and was never corrected poisons every dependent feature — the archived plan is what the next feature's planner reads as fact.
-3. Update the roadmap row: set Updated to today, append the files touched and the commit hash (or `uncommitted` if `nocommit`, plus `raw` if this was a raw pull), and set the status:
+2. **Correct `Provides:` to whatever was actually built**, then append an `## Evidence` section to the plan (the proof from step 9, a one-line gate summary like `gates: lint ✓ typecheck ✓ test ✓`, and the review verdict **with the rounds it took** — `review: clean (1 round)`, `review: notes-only — 3 open (1 round)`, `review: 4 blocks resolved in 2 rounds`, or `review: skipped (trivial diff)`), then move `docs/ristretto/plans/<FEATURE-ID>.md` → `docs/ristretto/plans/archived/<FEATURE-ID>.md`. A `Provides:` that drifted during implementation and was never corrected poisons every dependent feature — the archived plan is what the next feature's planner reads as fact.
+3. Update the roadmap row: set Updated to today, append the files touched and the commit hash (or `uncommitted` if `nocommit`), and set the status:
    - **`done`** — every acceptance criterion is proven.
    - **`needs-human`** — the code is built, committed, and gated, but at least one criterion is `pending human check`. The row's reason names the outstanding check and points at `manual-checks.md`. This is a *closing* status: the feature is finished as far as ristretto can take it, the plan is archived exactly as for `done`, and **it never holds up a dependent feature** — its `Provides:` exist in the code. Once you've run the check and ticked the box, `/ristretto:pull <ID>` re-checks the pending criteria and flips the row to `done`.
    - **`needs-review`** — built, committed and gated green, with review findings still open. **`pull` never writes this status**; only `brew` does, because only `brew` runs with nobody to ask. It is listed here because `pull` can be pointed at such a row to resolve it — see step 1.
@@ -375,7 +365,7 @@ The file's location is the status. Archiving **is** closing — so it always hap
 
 ## When done
 
-Print a short summary: what changed, which criteria are satisfied, the review verdict (including any `lean` findings deliberately left), the branch and commit (or that it's left uncommitted), and confirm the plan was archived and the roadmap updated. If this was `raw`, say plainly that nothing gated or reviewed it. If manual checks are outstanding, list them and point at `docs/ristretto/manual-checks.md`:
+Print a short summary: what changed, which criteria are satisfied, the review verdict (including any `lean` findings deliberately left), the branch and commit (or that it's left uncommitted), and confirm the plan was archived and the roadmap updated. If manual checks are outstanding, list them and point at `docs/ristretto/manual-checks.md`:
 
 ```
 🔧 1 manual check waiting — docs/ristretto/manual-checks.md
