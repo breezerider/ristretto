@@ -1,6 +1,6 @@
 ---
 description: Pull one feature from the roadmap and implement it cleanly in auto mode against the current code, then commit on a feature branch and close it. Pass "nocommit" to skip committing, or "raw" for an ungated spike (no gates, no red-first, no review).
-argument-hint: <feature ID, or "next"> [nocommit] [raw]
+argument-hint: <feature ID, or "next"> [nocommit] [raw] [easy]
 ---
 
 You are in the **PULL** phase of ristretto. You implement exactly one feature, directly, in auto mode — there is no approval gate. Closing the feature is **your** job at the end, never the user's.
@@ -16,6 +16,16 @@ When `raw` is passed: skip step 3 (no marker, so the hooks stay disarmed — the
 **Raw work is labelled as raw, always.** The `## Evidence` section records `gates: skipped (raw)` and `review: skipped (raw)`, and the roadmap row is appended with `raw`. Ungated code that looks gated on the roadmap is worse than no fast lane at all — you must be able to tell, months later, which commits nothing ever checked. Say so in the final summary too.
 
 Everything below assumes a normal pull unless it says otherwise.
+
+## `easy` — the forced-easy experiment lane
+
+`easy` treats **every** eligible feature as `easy`, whatever its `Tier` cell says. It exists to measure the tier design rather than argue about it.
+
+- **It rewrites nothing.** The roadmap's `Tier` cells are left exactly as `prep` set them. A run that edited them would destroy the ability to run the comparison a second time, and would quietly launder an experiment into a data change.
+- **The implementer runs on the capable model.** This is not an exception to the model rule but that rule applied honestly: the model tracks how much thinking the build plan already did, and under `easy` there is no build plan at all — the implementer plans and builds in one pass, which is the most demanding job in the loop, not the least.
+- **Escalation is recorded and then ignored.** On any of the five triggers, write `would-escalate: <trigger>` into the result and **build anyway, without a plan.** Escalating normally would send every hard feature down the `normal` path and leave nothing to compare; stopping would leave features unbuilt. Recording-and-continuing is the only arm that produces both halves — a census of which tickets were genuinely easy, and an outcome for the ones that weren't.
+- **Labelled forever, like `raw`.** `## Evidence` records `tier: easy (forced)` and every `would-escalate:` line verbatim; the roadmap row is appended with `easy`. Work built under an experiment must stay identifiable long after the experiment is forgotten.
+- **Gates and review are untouched**, which is what makes this safe to run: the worst outcome is not unproven code but more blocks found and more rounds spent — and that is the measurement. A forced-easy run can never produce a green row over code no gate and no reviewer ever saw.
 
 ## 0. Check the project's format version — before anything else
 
@@ -189,6 +199,22 @@ Before spending a planner run, confirm there's somewhere safe to work:
 ## 5. Expand the plan against the current code
 
 The plan holds the destination. This step writes the directions — **now**, against HEAD, so they cannot be stale.
+
+**Read the feature's `Tier` from its roadmap row first.**
+
+- `normal`, or no `Tier` cell at all → dispatch the planner exactly as below.
+- `easy` → **skip the planner entirely.** The contract is the build plan. Expand it inline in this context, the way `raw` does: read the current code in the touchpoint areas, find the utilities, patterns and test conventions this repo already uses, and settle the exact file paths, the real names and signatures, and the test cases that prove each criterion — before writing anything. Nothing is written to `.ristretto/build/`. **Everything else in this command is unchanged**: the gates stay armed, the tests still go red first, the review still runs, the closer still closes.
+- The `easy` argument was passed → every feature is treated as `easy` regardless of its row. See **`easy` — the forced-easy experiment lane** above.
+
+**The ratchet — escalate, never lower.** While expanding an `easy` contract inline, stop **before writing any code** and escalate to `normal` if any of these is true:
+
+1. the contract cannot be satisfied as written against the current code;
+2. it needs a new dependency, a migration, a schema change, or a manual check the contract does not already name;
+3. it must create public surface not named in `Provides:`;
+4. it spans more than three files;
+5. any acceptance criterion is `[human]`.
+
+To escalate: flip the row's `Tier` to `normal`, dispatch the planner as below, and have the closer record `escalated from easy: <trigger>` in the plan's `## Evidence`. **Nothing may ever lower a tier** — not this command, not a subagent, not a later run. An upfront label is an estimate made before anyone read the code, and this repo has receipts on those being optimistic; the ratchet is what makes being wrong cost minutes instead of a broken feature.
 
 Dispatch one **planner** subagent (fresh context, capable model) with this brief verbatim. Under `raw`, do this yourself in this context instead — no subagent, no `.ristretto/build/` file.
 
