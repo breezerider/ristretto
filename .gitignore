@@ -34,3 +34,6 @@ node_modules/
 
 # ristretto gate transient state
 .ristretto/
+
+# Build output (staged by `bun run build` → scripts/build-ristretto.mjs; never committed)
+/ristretto/

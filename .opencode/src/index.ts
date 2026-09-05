@@ -8,27 +8,27 @@ import { type Plugin } from "@opencode-ai/plugin"
 import { loadCommands } from "./commands.ts"
 
 // --- Plugin root ------------------------------------------------------------------
-// Resolves the package/project root that owns commands/ and scripts/. Two layouts:
-//   npm package:  <pkg>/.opencode/plugins/ristretto.mjs → root = <pkg>
-//   npx install:  <prefix>/plugins/ristretto.mjs        → root = <prefix>
-// Walk up from this file's dir to the first ancestor containing commands/.
+// Resolves the install prefix that owns ristretto/. One layout, all three install
+// paths (npm package, npx install, local clone after `bun run build`):
+//   npm package:  <pkg>/.opencode/plugins/ristretto.mjs   → root = <pkg> (ristretto/ staged by prepack)
+//   npx install:  <prefix>/plugins/ristretto.mjs          → root = <prefix>
+//   local clone:  <repo>/.opencode/plugins/ristretto.mjs  → root = <repo> (ristretto/ staged by `bun run build`)
+// Walk up from this file's dir to the first ancestor containing ristretto/gate.js.
 const PLUGIN_ROOT = (() => {
   let dir = import.meta.dir
   while (dir && dir !== path.dirname(dir)) {
-    if (existsSync(path.join(dir, "commands"))) return dir
+    if (existsSync(path.join(dir, "ristretto", "gate.js"))) return dir
     dir = path.dirname(dir)
   }
   return path.join(import.meta.dir, "..", "..")
 })()
 
-// Commands live as markdown (single source of truth with the Claude Code plugin).
-const COMMANDS_DIR = path.join(PLUGIN_ROOT, "commands")
+// Commands live as markdown under ristretto/skills/, invisible to OpenCode's
+// {command,commands}/**/*.md glob (so co-installed plugins stop colliding).
+const COMMANDS_DIR = path.join(PLUGIN_ROOT, "ristretto", "skills")
 
-// Gate runner. npx install copies it to <root>/ristretto/gate.js; the npm
-// package keeps it at <root>/scripts/gate.js. Detect which layout we're in.
-const GATE_JS = existsSync(path.join(PLUGIN_ROOT, "ristretto", "gate.js"))
-  ? path.join(PLUGIN_ROOT, "ristretto", "gate.js")
-  : path.join(PLUGIN_ROOT, "scripts", "gate.js")
+// Gate runner — single layout, no existsSync branch.
+const GATE_JS = path.join(PLUGIN_ROOT, "ristretto", "gate.js")
 
 // --- Plugin config ----------------------------------------------------------------
 // ristretto.jsonc lives in the OpenCode config dir (== PLUGIN_ROOT for an npx install,
@@ -84,7 +84,7 @@ const GATE_TIMEOUT_MS = 30_000
 
 function runGate(
   projectDir: string,
-  mode: "quick" | "full",
+  mode: "quick" | "full" | "guard",
   opts: { arg?: string; touchedFile?: string; fireAndForget?: boolean; captureOutput?: boolean } = {},
 ): Promise<{ code: number; output: string }> {
   const argv = [GATE_JS, mode, ...(opts.arg ? [opts.arg] : [])]
@@ -195,10 +195,41 @@ export const RistrettoPlugin: Plugin = async ({ directory, worktree, client }) =
       }
     },
 
+    // PreToolUse → tool.execute.before. House-rule guard: refuse writes to CLAUDE.md /
+    // AGENTS.md while a ristretto run is armed. gate.js `guard` decides armed vs not; the
+    // plugin only spawns it and throws on exit 2. A throw here aborts the tool's execute,
+    // so the file is never written — equivalent to Claude's exit-2 block.
+    "tool.execute.before": async (input, output) => {
+      // Guard only the mutating tools. Reading a house-rule file is legitimate —
+      // only write/edit are PreToolUse-scoped, so a `read` of CLAUDE.md/AGENTS.md
+      // must pass straight through.
+      if (input.tool !== "write" && input.tool !== "edit") return
+      const filePath = output.args?.filePath
+      if (!filePath) return
+      // captureOutput:false — gate.js's refusal is forwarded to the model via the
+      // throw below (same shape as the task gate at line 230); re-echoing it to the
+      // TUI stderr via console.error is pure noise, and the model often retries a
+      // blocked write several times back-to-back, multiplying that noise.
+      const { code, output: gateOutput } = await runGate(projectDir, "guard", { touchedFile: filePath, captureOutput: false })
+      debugLog(`tool.execute.before guard ${input.tool} ${filePath} → exit ${code}`)
+      if (code === 2) {
+        // Forward gate.js's named, contextual refusal (which file, and "outside a
+        // run, edit it freely") to the model — a generic message reads as transient
+        // and the model retries the same write. Fallback covers an edge gate.js
+        // exit 2 with no stderr (defensive; not observed in practice).
+        const err = new Error(
+          gateOutput.trim() ||
+          "ristretto: house-rule guard blocked this write — CLAUDE.md / AGENTS.md hold this repo's house rules. ristretto reads them, never writes them; put stale content in your final message instead.",
+        )
+        debugLog(`tool.execute.before guard FAILED — blocked ${input.tool}:\n${err.message}`)
+        throw err
+      }
+    },
+
     // SubagentStop → gate the subagent's result. Exit 2 throws → blocks the subagent.
     // `full subagent` is the never-exempt variant (a plain `full` Stop is exempted while
     // brew's orchestrator marker exists, but a subagent's work is never exempt).
-    // Per-edit format is handled by the LSP server (scripts/gate-lsp.mjs), not here.
+    // Per-edit format is handled by the LSP server (ristretto/gate-lsp.mjs), not here.
     "tool.execute.after": async (input) => {
       if (input.tool === "task") {
         const { code, output } = await runGate(projectDir, "full", { arg: "subagent", captureOutput: false })

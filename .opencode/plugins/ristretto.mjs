@@ -1,4 +1,4 @@
-// .opencode/plugin/index.ts
+// .opencode/src/index.ts
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync as readFileSync2 } from "node:fs";
 import path2 from "node:path";
@@ -807,7 +807,7 @@ var ParseErrorCode;
   ParseErrorCode2[ParseErrorCode2["InvalidCharacter"] = 16] = "InvalidCharacter";
 })(ParseErrorCode || (ParseErrorCode = {}));
 
-// .opencode/plugin/commands.ts
+// .opencode/src/commands.ts
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 var NAMESPACE_RE = /\/ristretto:([a-zA-Z0-9-]+)/g;
@@ -815,14 +815,13 @@ var DEFAULT_DESCRIPTION = "ristretto command";
 function loadCommands(dir) {
   const out = [];
   for (const file of readdirSync(dir).sort()) {
-    if (!file.endsWith(".md"))
+    if (!file.startsWith("ristretto-") || !file.endsWith(".md"))
       continue;
     const name = file.slice(0, -3);
     const raw = readFileSync(path.join(dir, file), "utf8");
     const { description, body } = parseFrontmatter(raw);
-    const key = name.startsWith("ristretto-") ? name : `ristretto-${name}`;
     out.push({
-      key,
+      key: name,
       description: description || DEFAULT_DESCRIPTION,
       template: body.replace(NAMESPACE_RE, "/ristretto-$1")
     });
@@ -840,22 +839,32 @@ function parseFrontmatter(raw) {
     return { body: raw };
   const fm = raw.slice(4, end);
   const body = raw.slice(end + 5);
-  const m = fm.match(/^description:\s*(.+)$/m);
-  return { description: m ? m[1].trim() : undefined, body };
+  const descM = fm.match(/^description:\s*(.+)$/m);
+  const hintM = fm.match(/^argument-hint:\s*(.+)$/m);
+  const description = descM ? descM[1].trim() : undefined;
+  const hint = hintM ? hintM[1].trim() : undefined;
+  let folded;
+  if (description && hint)
+    folded = `${hint} — ${description}`;
+  else if (description)
+    folded = description;
+  else if (hint)
+    folded = hint;
+  return { description: folded, body };
 }
 
-// .opencode/plugin/index.ts
+// .opencode/src/index.ts
 var PLUGIN_ROOT = (() => {
   let dir = import.meta.dir;
   while (dir && dir !== path2.dirname(dir)) {
-    if (existsSync(path2.join(dir, "commands")))
+    if (existsSync(path2.join(dir, "ristretto", "gate.js")))
       return dir;
     dir = path2.dirname(dir);
   }
   return path2.join(import.meta.dir, "..", "..");
 })();
-var COMMANDS_DIR = path2.join(PLUGIN_ROOT, "commands");
-var GATE_JS = existsSync(path2.join(PLUGIN_ROOT, "ristretto", "gate.js")) ? path2.join(PLUGIN_ROOT, "ristretto", "gate.js") : path2.join(PLUGIN_ROOT, "scripts", "gate.js");
+var COMMANDS_DIR = path2.join(PLUGIN_ROOT, "ristretto", "skills");
+var GATE_JS = path2.join(PLUGIN_ROOT, "ristretto", "gate.js");
 function configFile() {
   const dir = process.env.RISTRETTO_CONFIG || PLUGIN_ROOT;
   return path2.join(dir, "ristretto.jsonc");
@@ -973,6 +982,21 @@ var RistrettoPlugin = async ({ directory, worktree, client }) => {
       config.command = config.command || {};
       for (const cmd of loadCommands(COMMANDS_DIR)) {
         config.command[cmd.key] = { template: cmd.template, description: cmd.description };
+      }
+    },
+    "tool.execute.before": async (input, output) => {
+      if (input.tool !== "write" && input.tool !== "edit")
+        return;
+      const filePath = output.args?.filePath;
+      if (!filePath)
+        return;
+      const { code, output: gateOutput } = await runGate(projectDir, "guard", { touchedFile: filePath, captureOutput: false });
+      debugLog(`tool.execute.before guard ${input.tool} ${filePath} → exit ${code}`);
+      if (code === 2) {
+        const err = new Error(gateOutput.trim() || "ristretto: house-rule guard blocked this write — CLAUDE.md / AGENTS.md hold this repo's house rules. ristretto reads them, never writes them; put stale content in your final message instead.");
+        debugLog(`tool.execute.before guard FAILED — blocked ${input.tool}:
+${err.message}`);
+        throw err;
       }
     },
     "tool.execute.after": async (input) => {

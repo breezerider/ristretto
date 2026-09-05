@@ -16,12 +16,17 @@ import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
+// `root` resolves from this file's location. The source lives at
+// <repo>/.opencode/scripts/gate-lsp.mjs but is never executed there —
+// build-ristretto.mjs copies it to <repo>/ristretto/gate-lsp.mjs (dev/test) and
+// the installer copies that to <prefix>/ristretto/gate-lsp.mjs. At both staged
+// locations `..` is the directory that holds ristretto/gate.js (repo root or
+// install prefix), so a single `..` is correct for every layout this file
+// actually runs from.
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..")
-// npx install copies gate.js to <root>/ristretto/gate.js; the npm package keeps it
-// at <root>/scripts/gate.js. Detect which layout we're in (mirrors the plugin).
-const GATE_JS = existsSync(path.join(root, "ristretto", "gate.js"))
-  ? path.join(root, "ristretto", "gate.js")
-  : path.join(root, "scripts", "gate.js")
+// One layout: gate.js sits at <root>/ristretto/gate.js — staged by `bun run build`
+// for the local clone + npm install, written by the installer for npx installs.
+const GATE_JS = path.join(root, "ristretto", "gate.js")
 
 // --- Framing ---------------------------------------------------------------
 let buf = Buffer.alloc(0)

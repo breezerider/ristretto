@@ -1,6 +1,6 @@
 {
   "name": "ristretto",
-  "version": "0.12.0",
+  "version": "0.16.0",
   "main": "./.opencode/plugins/ristretto.mjs",
   "bin": {
     "ristretto": "bin/install.mjs"
@@ -12,16 +12,12 @@
   "files": [
     ".opencode/plugins/ristretto.mjs",
     "bin",
-    "commands",
-    "scripts/gate.js",
-    "scripts/gate-lsp.mjs",
-    "scripts/version.js",
-    "docs/format-migration.md"
+    "ristretto"
   ],
   "scripts": {
-    "build": "bun build .opencode/plugin/index.ts --outfile .opencode/plugins/ristretto.mjs --target node",
+    "build": "bun build .opencode/src/index.ts --outfile .opencode/plugins/ristretto.mjs --target node && node .opencode/scripts/build-ristretto.mjs",
     "prepack": "bun run build",
-    "test": "node scripts/gate.test.js && bun test ./.opencode/plugin/adapter.test.ts"
+    "test": "node scripts/gate.test.js && bun run build && bun test ./.opencode/src/adapter.test.ts ./.opencode/src/package.test.ts ./.opencode/src/README.opencode.test.ts bin/install.test.ts"
   },
   "dependencies": {
     "jsonc-parser": "^3.3.1"
