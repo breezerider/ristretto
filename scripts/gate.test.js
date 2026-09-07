@@ -1160,4 +1160,85 @@ fs.utimesSync(path.join(dir, '.ristretto', 'pulling'), longAgo, longAgo);
 assert.strictEqual(gate(dir, 'guard', write('CLAUDE.md')).status, 0,
   'a stale marker must not keep the house rules locked');
 
+// --- A silence budget above the harness watchdog is a budget nobody is alive to collect. ---
+// Hang detection reads silence, and `silence` is authored per repo — so a repo whose suite is
+// genuinely quiet for a quarter of an hour will be told, correctly, to raise the budget. Raising it
+// past the ~600s stall watchdog buys NOTHING: the agent waiting on the gate is killed first, and a
+// killed agent loses its result entirely. The gate then looks green in the log and the orchestrator
+// gets `failed: no progress for 600s` on work that was complete and proven. Measured on the
+// vs-ruprechtshofen brew of 2026-09-07: `silence.test` 2400, one unbroken quiet stretch of 1,008,795ms
+// (PHPUnit `--no-progress`), and three subagents reported failed whose results were green.
+// So the budget is bounded by what the caller can still survive, and reporting UNVERIFIED at nine
+// minutes beats being killed at ten having said nothing. Exactly the rule DEFAULT_LOCK_WAIT already
+// follows (check 54) — applied to the budget that actually did the killing.
+
+// 103. A configured silence above the watchdog is not honoured: the kill lands inside the budget the
+//      caller has left, so there is still somebody there to read the result.
+dir = tmpRepo(JSON.stringify({ gates: { test: HANG }, silence: { test: 2400 }, watchdog: 65 }));
+arm(dir);
+r = gate(dir, 'full');
+assert.ok(r.stderr.includes('printed nothing for 5s'),
+  'a 2400s budget under a 65s watchdog must be cut to the room the caller has — got: ' + r.stderr.slice(0, 400));
+
+// 104. And it says which key it overrode. A clamp that binds silently is the same defect one layer
+//      down: the config still reads 2400, and the next person raises it again.
+assert.ok(/"silence"\."test"|silence\.test/.test(r.stderr) && /2400/.test(r.stderr),
+  'the override must name the configured key and value it is not honouring — got: ' + r.stderr.slice(0, 400));
+assert.ok(/watchdog|killed after|stall/i.test(r.stderr),
+  'and say what the ceiling is for — got: ' + r.stderr.slice(0, 400));
+
+// 105. `verify` is exempt. It is the deliberate whole-repo run — brew's pre-flight and its final
+//      pass — launched by the orchestrator and backgrounded, so no stall watchdog is counting. That
+//      run is allowed to be quiet for as long as the suite honestly takes; clamping it would make a
+//      slow-but-healthy suite unprovable anywhere.
+const QUIET_OK = `node -e "setTimeout(()=>process.exit(0), 6000)"`;
+dir = tmpRepo(JSON.stringify({ gates: { test: QUIET_OK }, silence: { test: 2400 }, watchdog: 65 }));
+r = gate(dir, 'verify');
+assert.strictEqual(r.status, 0,
+  'verify must not be clamped — the whole-repo run has no agent watchdog to lose: ' + r.stderr.slice(0, 400));
+
+// 106. The advice must stop offering the one move that cannot work. Once the budget is already at
+//      the ceiling, "raise silence" is advice to change a number that is being ignored in the
+//      caller's favour; what is left is making the gate talk, or scoping it.
+dir = tmpRepo(JSON.stringify({ gates: { test: HANG }, silence: { test: 2400 }, watchdog: 65 }));
+arm(dir);
+r = gate(dir, 'full');
+assert.ok(!/raise "silence"/.test(r.stderr),
+  'at the ceiling the gate must not advise raising the budget further — got: ' + r.stderr.slice(0, 500));
+assert.ok(/already at|cannot be raised|make it stream|make the gate talk|scope/i.test(r.stderr),
+  'and must name what is actually left to do — got: ' + r.stderr.slice(0, 500));
+
+// 107. Calibration cannot climb past it either. Probation doubles the rope on every silent kill and
+//      QUIET_CEILING_MS is 30 minutes — three times the watchdog — so the automatic path reaches the
+//      same dead end as the hand-written one, with nobody having configured anything at all.
+dir = tmpRepo(JSON.stringify({ gates: { test: HANG }, silence: { test: 1 }, watchdog: 65 }));
+arm(dir);
+let usedSecs = [];
+for (let i = 0; i < 4; i++) {
+  const run = gate(dir, 'full');
+  const m = /printed nothing for (\d+)s/.exec(run.stderr);
+  if (m) usedSecs.push(Number(m[1]));
+}
+assert.strictEqual(usedSecs.length, 4, 'every run must report the budget it was killed at');
+assert.ok(Math.max(...usedSecs) <= 5,
+  `probation must never widen past the watchdog ceiling — got ${usedSecs.join(', ')}s`);
+
+
+// 108. And the pre-flight is where it has to be said. `verify` runs its own budget uncapped, so the
+//      clamp never binds there and the announcement above never fires — which would leave brew's
+//      pre-flight, the one moment config is audited before a loop that will pay for it dozens of
+//      times, as the only run that stays quiet about it. It audits the number instead of obeying it.
+dir = tmpRepo(JSON.stringify({ gates: { test: PASS }, silence: { test: 2400 } }));
+r = gate(dir, 'verify');
+assert.strictEqual(r.status, 0, 'the audit reports, it does not refuse — the clamp already makes the value harmless');
+assert.ok(/2400/.test(r.stderr) && /"silence"\."test"|silence\.test/.test(r.stderr),
+  'verify must name an authored budget the hooks will not honour — got: ' + r.stderr.slice(0, 400));
+
+// 109. A budget under the ceiling is not news, in any mode. An audit that fires on every healthy
+//      repo is one nobody reads by the second feature.
+dir = tmpRepo(JSON.stringify({ gates: { test: PASS }, silence: { test: 120 } }));
+r = gate(dir, 'verify');
+assert.ok(!/not being honoured|will not honour/.test(r.stderr),
+  'a budget inside the ceiling must produce no audit at all — got: ' + r.stderr.slice(0, 300));
+
 console.log('gate.test.js: all checks passed');

@@ -114,6 +114,76 @@ function markerIdleMs(p) {
 // why they hold across every stack rather than needing a table of runners.
 const DEFAULT_SILENCE = { format: 30, lint: 600, typecheck: 600, test: 300, testChanged: 300 };
 
+// Kept back from the silence budget for the same reason LOCK_SLACK is kept back from the wait: the
+// kill has to land early enough that the report gets written, read, and answered by an agent that
+// is still alive.
+const SILENCE_SLACK = 60;
+
+// Never zero, however small a watchdog someone configures — a budget of nothing would report every
+// gate as hung before it started.
+const MIN_SILENCE = 5;
+
+// The highest silence budget that can still produce a result somebody is alive to collect.
+//
+// `silence` is authored per repo, and a repo whose suite is genuinely quiet for a quarter of an hour
+// will be told — correctly, by this very runner — to raise the budget. Raising it past the watchdog
+// buys NOTHING: the agent waiting on the gate is killed first, and a killed agent loses its result
+// entirely. The gate reads green in the log while whoever dispatched it is told the agent stalled,
+// about work that was finished and proven. Both roads to that end were open here: a hand-written
+// `silence` was merged over the defaults unclamped, and calibration alone can widen to
+// QUIET_CEILING_MS — thirty minutes, three times the watchdog — with nothing configured at all.
+// So the budget is bounded by what the caller can survive. This can turn a slow-but-healthy gate
+// into a reported hang, and that is the trade taken deliberately: UNVERIFIED at nine minutes is a
+// result, and being killed at ten having said nothing is not. Exactly the reasoning DEFAULT_LOCK_WAIT
+// already follows.
+//
+// `verify` is exempt, and has to be: it is the deliberate whole-repo run — brew's pre-flight and its
+// final pass — launched and backgrounded by the orchestrator, with no stall watchdog counting against
+// it. Clamping that would make a suite that is merely slow unprovable anywhere at all.
+function hookSilenceCeilingSec() {
+  return Math.max(MIN_SILENCE, watchdog - SILENCE_SLACK);
+}
+function silenceCeilingSec() {
+  if (MODE === 'verify') return Infinity;
+  return hookSilenceCeilingSec();
+}
+
+// The pre-flight audit. `verify` runs uncapped, so nothing above would ever fire there — which would
+// make the one run that exists to check the config before a loop pays for it dozens of times the only
+// run that stays quiet about a budget the loop will not honour. It reports and does not refuse: the
+// clamp has already made the number harmless, and stopping a brew over a value that can no longer
+// hurt it would be a gate on tidiness. What it buys is the cause getting fixed — a budget this high
+// was written because something is mute, and that something is still mute.
+function auditSilenceBudgets() {
+  const ceilingSec = hookSilenceCeilingSec();
+  const over = silenceAuthored.filter((k) => Number.isFinite(silence[k]) && silence[k] > ceilingSec);
+  if (!over.length) return;
+  for (const key of over) {
+    console.error(`ristretto: "silence"."${key}" is ${silence[key]}s — the hooks will not honour it, they will use ${ceilingSec}s.`);
+  }
+  console.error(`  An agent is killed after ~${watchdog}s of silence and loses its result entirely, so a budget past`);
+  console.error('  that point cannot be collected. This run is exempt (nothing is waiting on it), which is exactly');
+  console.error('  why it is the run that has to tell you. A number this high was written because a gate is mute:');
+  console.error('  make it stream (drop --no-progress/-q, add a per-test reporter) or scope it with "testChanged",');
+  console.error('  then put the budget back where it measures something.');
+}
+
+// Said once per run, and only for a budget somebody TYPED. Calibration going over is the runner's own
+// doing and is simply capped, and so are the defaults — `lint` and `typecheck` are 600 against a 600s
+// watchdog, so a scolding here would fire on every repo about a number nobody chose. A value in
+// `.ristretto.json` is a decision, and leaving a decision silently ignored is how the same defect
+// returns one layer down: the file still reads 2400, so the next person raises it again.
+const ceilingAnnounced = new Set();
+function announceSilenceCeiling(gate, configuredSec, ceilingSec) {
+  if (ceilingAnnounced.has(gate.key)) return;
+  ceilingAnnounced.add(gate.key);
+  console.error(`ristretto: "silence"."${gate.key}" is ${configuredSec}s, and is not being honoured — using ${ceilingSec}s.`);
+  console.error(`  The agent waiting on this gate is killed after ~${watchdog}s of quiet, and a killed agent loses its`);
+  console.error('  result entirely. A budget past that point cannot be collected by anyone. If this gate is genuinely');
+  console.error('  quiet for that long, the fix is to make it stream (drop any --no-progress/-q flag, add a per-test');
+  console.error('  reporter) or to scope it with "gates"."testChanged" — not to raise the number.');
+}
+
 // Hard duration caps, seconds. OFF by default — a slow gate is not a broken gate. `format` is the
 // exception: it's a per-keystroke convenience on a single file, and its hook is capped anyway.
 const DEFAULT_HARD_CAP = { format: 30 };
@@ -169,10 +239,13 @@ let silence = DEFAULT_SILENCE;
 let hardCaps = DEFAULT_HARD_CAP;
 let lockWait = DEFAULT_LOCK_WAIT;
 let watchdog = DEFAULT_WATCHDOG;
+// Which silence budgets a human actually wrote down, as opposed to inherited.
+let silenceAuthored = [];
 try {
   const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   gates = config.gates || {};
   silence = { ...DEFAULT_SILENCE, ...(config.silence || {}) };
+  silenceAuthored = Object.keys(config.silence || {});
   hardCaps = { ...DEFAULT_HARD_CAP, ...(config.timeouts || {}) };
   if (Number.isFinite(config.lockWait)) lockWait = config.lockWait;
   if (Number.isFinite(config.watchdog)) watchdog = config.watchdog;
@@ -695,6 +768,17 @@ const budget = (gate) => {
   if (configuredSec && Number.isFinite(probationMs)) {
     silenceSec = Math.max(silenceSec, Math.round(Math.min(probationMs, QUIET_CEILING_MS) / 1000));
   }
+  // Last, so it binds on every road to a budget: the configured number, the calibrated widening, and
+  // the probation rope all pass through here.
+  if (silenceSec) {
+    const ceilingSec = silenceCeilingSec();
+    if (silenceSec > ceilingSec) {
+      if (configuredSec > ceilingSec && silenceAuthored.includes(gate.key)) {
+        announceSilenceCeiling(gate, configuredSec, ceilingSec);
+      }
+      silenceSec = ceilingSec;
+    }
+  }
   return { silenceSec, hardCapSec: hardCaps[gate.key] };
 };
 
@@ -929,7 +1013,16 @@ function hangAdvice(gate, result, usedSec) {
     lines.push(`  Find what it's waiting on (an open handle, a port, watch mode, a prompt), or:`);
   }
   lines.push(`  · scope the run — set "gates"."testChanged" to your runner's related-tests form, with {files}`);
-  lines.push(`  · if the tool is simply quiet for long stretches, raise "silence"."${gate.key}" (now ${usedSec}s)`);
+  // At the ceiling, "raise the budget" is advice to change a number that is already being ignored in
+  // the caller's favour, and following it costs another run to learn nothing. What is actually left is
+  // making the gate talk, or running less of it.
+  if (usedSec >= silenceCeilingSec()) {
+    lines.push(`  · "silence"."${gate.key}" is already at ${usedSec}s, the most the agent's ~${watchdog}s watchdog leaves —`);
+    lines.push(`    it cannot be raised any further. Make the gate stream instead (drop --no-progress/-q, add a`);
+    lines.push(`    per-test reporter), or scope it, so a healthy run stops looking exactly like a wedged one.`);
+  } else {
+    lines.push(`  · if the tool is simply quiet for long stretches, raise "silence"."${gate.key}" (now ${usedSec}s)`);
+  }
   return lines.join('\n');
 }
 
@@ -971,6 +1064,7 @@ async function main() {
     // Before the cache short-circuit: a config gap is true whether or not this tree was proven
     // already, and the cached path is exactly when a resumed batch would otherwise never hear it.
     auditScopedGates();
+    auditSilenceBudgets();
     // A pre-flight repeated on an unchanged tree proves nothing the first one didn't. `cached`
     // is how brew asks for that verdict instead of re-paying for it after a session restart.
     if (CACHED) {
