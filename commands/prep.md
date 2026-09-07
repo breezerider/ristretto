@@ -100,6 +100,14 @@ Keep it light: only add `Depends:` where a real prerequisite exists. Most featur
 
    Push back **once** on a vague input, offering a sharpened version to confirm. If a criterion still can't be made checkable, that is the escalation trigger in step 1 — roast it out. Only what survives the roast unanswered lands in `Blockers:`, naming who or what can answer it; `brew` will skip the feature, and the blocked row names exactly what refinement is missing. Never write an unmeasurable criterion, and never invent one the user didn't confirm.
 
+   **A ruling is not a criterion. Roast mode produces both, and only one of them earns a test.**
+
+   Roast mode's whole job is to settle questions, and the answers land in `Decisions:`. What must not happen is the same answer being restated in `Acceptance:` — because every `[auto]` line becomes tests, so a decision copied up there is *the user's design choice, pinned by an assertion*. Two costs, and the second is the worse one: the suite carries tests that prove nothing a user can observe, and the decision can never be revisited without a red test to argue with. Measured on a real contract: of eleven `[auto]` criteria, three were rulings in disguise — "navigation works without JavaScript" (the ruling was *server-rendered, navigated by query string*), "no more than one database query per month displayed", and a token rule already enforced repo-wide.
+
+   The test is **who can see it**. A user can see that the previous-month link works; a user cannot see whether it works by query string or by fetch. So the criterion is the behaviour, the mechanism stays in `Decisions:`, and the implementer honours it by writing the code that way — `pull` step 7 makes that binding, and the reviewer checks it by reading. Where a ruling has a consequence a user *can* observe, write that consequence and let the ruling stay a ruling.
+
+   **And when a criterion is already proven, say so instead of ordering a test.** A repo several features in has a suite that already enforces a great deal repo-wide — escaping, tokens, locale, a schema guard. A criterion those already cover is not a gap: write it with the existing test named (`already enforced by FrontendTokensTest repo-wide; must stay green`), and the implementer writes nothing new for it. This is the cheapest line in a contract and it is almost never written, because looking costs a minute and nobody is asked to look. Ask.
+
    **Then give every criterion a proof method — there are exactly two, and "none" is not one of them.**
 
    - **`[auto]`** — a test, a gate, or a measurement the agent can run proves it. The default, and the right answer far more often than it first looks.

@@ -64,6 +64,10 @@ HOUSE RULES
     .ristretto/build/<ID>.md and deleted at close. neither can rot.
   • tests first — the build plan's test cases become failing tests before any
     implementation. red proves the test tests something; then code to green.
+    one test per criterion, at the cheapest level that still proves it; a
+    criterion an existing test already covers is cited, not re-tested; and a
+    ruling in Decisions: binds the code, never an assertion. the suite is
+    charged to every later feature at every stop.
   • deterministic gates — while implementing, a Stop hook runs your repo's
     lint + typecheck + test (.ristretto.json) and blocks until green.
     enforced, not self-reported. evidence is recorded, not claimed.
