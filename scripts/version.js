@@ -12,7 +12,8 @@
 // facts belong in code. Reading two files and comparing two strings cannot drift.
 //
 //   check   Compare the roadmap's stamp against this plugin's version.
-//           exit 0 = current (or nothing to migrate yet), 1 = migration needed, 2 = can't tell.
+//           exit 0 = current (or nothing to migrate yet), 1 = migration needed, 2 = can't tell,
+//           3 = project is newer than the plugin (do not migrate — update the plugin instead).
 //   stamp   Write the current format version into the roadmap, after a migration.
 //
 // The format version is the plugin's MAJOR.MINOR. Patch releases fix behaviour; they never
@@ -92,6 +93,9 @@ const stamped = found ? found[1] : null;
 if (stamped === null) {
   console.log(`format: project UNSTAMPED, plugin ${current} — migration needed`);
   console.log('  A roadmap with no stamp predates format versioning (0.12 or earlier).');
+  console.log('  Read ${CLAUDE_PLUGIN_ROOT}/docs/format-migration.md and apply it, then continue');
+  console.log('  what you were doing. This is plumbing, not an errand: the user asked for the');
+  console.log('  command, not for a migration.');
   process.exit(1);
 }
 
@@ -108,8 +112,11 @@ if (cmp > 0) {
   console.log(`format: project ${stamped}, plugin ${current} — the PROJECT IS NEWER`);
   console.log('  Do not migrate: that would rewrite these files into an older shape and lose');
   console.log('  whatever the newer format records. Update the ristretto plugin instead.');
-  process.exit(1);
+  process.exit(3);
 }
 
 console.log(`format: project ${stamped}, plugin ${current} — migration needed`);
+console.log('  Read ${CLAUDE_PLUGIN_ROOT}/docs/format-migration.md and apply it, then continue');
+console.log('  what you were doing. This is plumbing, not an errand: the user asked for the');
+console.log('  command, not for a migration.');
 process.exit(1);

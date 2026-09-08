@@ -67,10 +67,11 @@ assert.ok(r.stdout.includes(CURRENT), 'the plugin version must be named');
 assert.ok(r.stdout.includes('migration needed'), '0.9 must be treated as older than 0.13, not newer');
 
 // 6. A project NEWER than the plugin must refuse, not migrate. That is a stale install, and
-//    "migrating" it would mean discarding whatever the newer format records.
+//    "migrating" it would mean discarding whatever the newer format records. This gets its own
+//    exit code (3) rather than sharing 1 with "migration needed" — see check 9.
 dir = project('# Ristretto Roadmap\n<!-- ristretto-format: 99.0 -->\n');
 r = run(dir, 'check');
-assert.strictEqual(r.status, 1, 'a newer project must not report clean');
+assert.strictEqual(r.status, 3, 'a newer project must exit 3, not 1');
 assert.ok(r.stdout.includes('PROJECT IS NEWER'), 'the direction of the mismatch must be unmistakable');
 assert.ok(r.stdout.includes('Do not migrate'), 'and it must say plainly not to migrate');
 assert.ok(r.stdout.includes('Update the ristretto plugin'), 'and name the actual remedy');
@@ -97,6 +98,38 @@ assert.ok(/^\d+\.\d+$/.test(CURRENT), 'the format version must be MAJOR.MINOR, w
   const r = run(dir, 'check');
   assert.strictEqual(r.status, 1, 'a 0.13 project must be migrated once the plugin is past 0.13');
   assert.ok(r.stdout.includes('0.13') && r.stdout.includes(CURRENT), 'both versions must be named');
+}
+
+// 9. "Project is newer" must be its own exit code. It shared exit 1 with "migration needed",
+//    and the commands told them apart by grepping for PROJECT IS NEWER in the output — so
+//    rewording the message would have migrated a newer project backwards.
+{
+  dir = project('<!-- ristretto-format: 99.0 -->\n');
+  r = run(dir, 'check');
+  assert.strictEqual(r.status, 3, 'a newer project must exit 3, not 1');
+}
+
+// 10. An unmigrated project still exits 1, and now says what to do without the command
+//     having to carry the paragraph.
+{
+  dir = project('# Roadmap\n');
+  r = run(dir, 'check');
+  assert.strictEqual(r.status, 1, 'an unstamped roadmap must exit 1');
+  assert.ok(/format-migration\.md/.test(r.stdout + r.stderr),
+    'exit 1 must name the migration doc itself — got: ' + (r.stdout + r.stderr).slice(0, 300));
+  assert.ok(/then continue|come back|resume/i.test(r.stdout + r.stderr),
+    'it must say to come back and continue, not treat migration as the errand');
+}
+
+// 11. The stamped-but-older branch must carry the same remediation as the unstamped branch —
+//     both are "migration needed", and the reader should not have to guess why one paragraph
+//     is missing from the other.
+{
+  dir = project('# Ristretto Roadmap\n<!-- ristretto-format: 0.9 -->\n');
+  r = run(dir, 'check');
+  assert.strictEqual(r.status, 1, 'an older format must still exit 1');
+  assert.ok(/format-migration\.md/.test(r.stdout + r.stderr),
+    'the older-format branch must also name the migration doc');
 }
 
 console.log('version.test.js: all checks passed');
