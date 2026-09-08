@@ -48,3 +48,43 @@ that is still honest; reuse an existing test before writing a new one; a decisio
 never a test.
 
 **Where it lives now:** `briefs/common.md`'s Tests section.
+
+## The abandoned wait
+
+Reaching for a wait-for-completion tool — `Monitor`, any other notification helper, or
+the sentence "I'll wait for it and continue when it lands" — reads like a plan and
+executes as a death: the turn ends, the subagent is killed for going silent, and the run
+it started finishes for nobody. Three subagents in one batch died exactly this way, each
+having politely announced it would wait; that batch lost about an hour to re-running one
+of them from a half-finished tree and to killing two more that woke later and collided
+with their own replacements.
+
+**Rule produced:** never end a turn with a run still in flight — poll it with your own
+checks from the turn you are already in, or run it in the foreground with a generous
+timeout.
+
+**Where it lives now:** `briefs/implementer.md`'s prove step, the background-and-poll
+conditional ("start it in the background and poll it from this turn until it ends —
+never end a turn with it running").
+
+Source: `commands/brew.md:138`.
+
+## Three improvisations on `git restore`
+
+The old rule for a block still open after round 3 was `git restore` on every touched
+file. Every subagent that ever actually met that rule declined it: one ignored the
+findings and carried on, one took a disallowed fourth round, one invented
+`.ristretto/stranded/` to park work the command gave it nowhere else to keep. Three
+improvisations, one diagnosis — and they were right: the gates were green, the code
+worked, and what remained open was an advisory opinion from an actor that runs no gates
+and changes no files. Deleting a green tree over that was disproportionate.
+
+**Rule produced:** still open after round 3 → commit it as `needs-review`, with the open
+findings copied verbatim into the archived plan; never `git restore`. `needs-review`
+still satisfies `Depends:`, so the features behind it keep brewing.
+
+**Where it lives now:** `briefs/closer.md`'s status rules (the `needs-review` status and
+its verbatim-open-findings requirement) and `commands/brew.md`'s verdict step ("Still
+open after round 3 → commit it as `needs-review`. Never `git restore`.").
+
+Source: `commands/brew.md:175`.

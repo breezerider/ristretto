@@ -7,7 +7,7 @@ that matches no route, a scoped gate missing a flag the full gate carries, a `si
 value over the ceiling, tool drift — is caught by running `gate.js verify` and reading
 what it names. This file is what's left: the four calls verify cannot make for you.
 
-## The four judgment rules
+## The five judgment rules
 
 1. **Work out the reporter from *this* project, never from memory.** Whatever you
    believe about a runner's flags may be wrong, out of date, or right for a version this
@@ -29,6 +29,9 @@ what it names. This file is what's left: the four calls verify cannot make for y
    touched implementation hands them nothing to run. Check your scoped command by hand
    against a source file with no test in it — for pytest, "no tests collected" is exit
    5, a failing gate, not a clean skip.
+5. **Leave a gate as `""` only if the repo genuinely has no such tool — empty gates are
+   skipped.** A gate naming a tool the repo doesn't have is worse than an empty one;
+   gate.js cannot judge "genuinely," so this stays a person's call.
 
 **Everything else** — run `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.js" verify` and fix
 what it names.
