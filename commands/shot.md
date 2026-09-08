@@ -1,5 +1,5 @@
 ---
-description: The one-off door into the easy tier — prep and pull one small feature in a single pass: plan it inline, implement it in auto mode, commit it on a feature branch, and close it. Gates, red-first tests and review all still run. Pass "nocommit" to skip committing.
+description: Builds a planned feature fast — easy path, no planner.
 argument-hint: <feature ID> [nocommit]
 ---
 

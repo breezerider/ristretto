@@ -1,5 +1,5 @@
 ---
-description: Brew the whole pot — autonomously pull every eligible planned feature from the roadmap in sequence, each planned and built by fresh subagents, gated by hooks, on a single session branch. Skips to `blocked` instead of guessing. Runs until nothing is left to brew.
+description: Builds every open feature in sequence, unattended.
 argument-hint: [easy]
 ---
 

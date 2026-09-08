@@ -30,7 +30,7 @@ For each survivor, append or replace this feature's section in `docs/ristretto/m
 # Manual Checks
 
 Things ristretto had no way to reach. Do one, tick its box, then re-run
-the pull to verify what was waiting on it. Nothing here is about production.
+the pull to verify what was waiting on it. Never production.
 ```
 
 Not a blocker — plan its test skipped, naming the check that unblocks it.

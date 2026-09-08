@@ -39,9 +39,10 @@ THE WORKFLOW
                                     open findings, then /ristretto:pull <ID>.
 
 THE REST OF THE MENU
-  /ristretto:shot <feature>         prep + pull one trivial feature in one pass.
-                                    same spec standard — no checkable criteria
-                                    or no Provides: on the spot → routes to prep.
+  /ristretto:shot <feature>         the easy path against a plan prep already
+                                    wrote — builds it fast, no planner. no
+                                    plan yet → prep first; can't finish on
+                                    the spot → escalates to pull.
   /ristretto:status [filter]        roadmap view: gauge + rows.
                                     filters: open | done | blocked | checks | ID | flight
   /ristretto:tamp [target] [fix]    lean-code review of a diff/file: waste,

@@ -1,5 +1,5 @@
 ---
-description: Prep one or more features into drift-resistant plans — a deep, durable contract plus a lean approach — and add them to the project roadmap. Planning only — no code. Pass "deep" to force roast mode.
+description: Plans features into the roadmap. No code.
 argument-hint: <feature IDs, pasted feature text, or short descriptions> [deep]
 ---
 
@@ -15,7 +15,7 @@ Each input is one of: a **tracked feature** (has an ID like `BREW-224` — keep 
 node "${CLAUDE_PLUGIN_ROOT}/scripts/version.js" check
 ```
 
-Exit 0 → continue. Exit 1 → **the project's files are in an older shape than this version reads.** Read `${CLAUDE_PLUGIN_ROOT}/docs/format-migration.md` and apply it — it tells the user what is happening, brings `docs/ristretto/` up to date, and hands back here to continue. It is plumbing, not an errand: the user asked for this command, not for a migration. Do not proceed on an unmigrated project — a status or field this version doesn't recognise gets read as something else, silently, and the first sign of it is a wrong decision much further down. Exit 2, or "PROJECT IS NEWER" → stop and report; that is a stale plugin install, not a stale project.
+Exit 0 → continue. Exit 1 → follow what it printed. Exit 3 → the project is newer than this plugin: stop and report a stale install. Exit 2 → cannot tell: stop.
 
 ## Setup
 
@@ -31,8 +31,8 @@ If `roadmap.md` is new, start it with this table:
 # Ristretto Roadmap
 <!-- ristretto-format: x.y -->
 
-| Flight | Feature | Title | Tier | Status | Plan | Updated |
-|--------|---------|-------|------|--------|------|---------|
+| Flight | Feature | Title | Tier | Status | Plan | Updated | Files touched | Commit |
+|--------|---------|-------|------|--------|------|---------|----------------|--------|
 ```
 
 Don't write the stamp by hand — create the roadmap, then run `node "${CLAUDE_PLUGIN_ROOT}/scripts/version.js" stamp`, which fills in the version this plugin actually is. A hand-typed version is a guess, and a wrong one sends the next command into a migration the project doesn't need.
@@ -175,7 +175,7 @@ Keep it light: only add `Depends:` where a real prerequisite exists. Most featur
 
 6. **Check `Consumes:` against `Provides:`.** When feature B lists A in `Depends:`, B's `Consumes:` must be a subset of A's `Provides:`. Check this at prep time and say so if it isn't — a mismatch here is the cheapest bug you will ever fix. Read A's plan wherever it lives, `plans/` or `plans/archived/`.
 
-7. **Add or update one row** in `roadmap.md` for the feature — fill the `Flight` cell with its slug (or `—`), and the `Tier` cell with `normal` or `easy`.
+7. **Add or update one row** in `roadmap.md` for the feature — fill the `Flight` cell with its slug (or `—`), and the `Tier` cell with `normal` or `easy`. `pull`/`brew` fill `Files touched` and `Commit` at close; leave them `—` here. Fill every cell the header declares; a row short one cell shifts every column after it, and the next reader takes a status for a tier.
 
    **`easy` is a claim about the contract, not about the ticket.** It means: this contract is already concrete enough that a planner subagent would add nothing to it — the file paths, the real names and signatures, and the shape of the tests that prove each criterion are all decided here. A feature is not `easy` because it feels small or sounds quick; it is `easy` because its contract is finished. That makes the label checkable by reading the contract, rather than a feeling about the ticket.
 

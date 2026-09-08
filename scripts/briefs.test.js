@@ -160,4 +160,28 @@ assert.ok(!/append.*easy|appended with/.test(brew), 'the forced-easy lane must n
 assert.ok(!/`git restore`/.test(brew) || /gate\.js" state|proven green/.test(brew),
   'any git restore in brew must be gated on the tree not being proven green');
 
+// 19. The roadmap cell rule lives where rows are written.
+assert.ok(read('commands/prep.md').includes('every cell'), 'prep.md must carry the cell rule — it writes the rows');
+assert.ok(!read('commands/shot.md').includes('every cell'), 'shot.md no longer writes rows');
+
+// 20. Descriptions say when to use, not how it works.
+for (const [f, must] of [['commands/pull.md', 'normal'], ['commands/shot.md', 'easy'],
+                         ['commands/brew.md', 'unattended']]) {
+  const desc = (read(f).match(/^description:\s*(.*)$/m) || [])[1] || '';
+  assert.ok(desc.length < 120, `${f} description is ${desc.length} chars — it should discriminate, not summarise`);
+  assert.ok(desc.toLowerCase().includes(must), `${f} description must say "${must}"`);
+}
+
+// 21. prep's version paragraph is a one-liner like the other three — no literal exit-code text left.
+assert.ok(!/PROJECT IS NEWER/.test(read('commands/prep.md')), 'prep.md must not quote the literal "PROJECT IS NEWER" string — one line like the other three');
+
+// 22. help.md and README.md no longer describe shot as prep + pull in one pass.
+assert.ok(!/prep \+ pull/i.test(read('commands/help.md')), 'help.md must not describe shot as "prep + pull"');
+assert.ok(!/prep \+ pull/i.test(read('README.md')), 'README.md must not describe shot as "prep + pull"');
+
+// 23. README's Depends: sentence names all three closing statuses, needs-review included.
+const readmeDepSentence = (read('README.md').match(/A prerequisite counts as finished[^.]*\./) || [''])[0];
+assert.ok(/needs-review/.test(readmeDepSentence) && /needs-human/.test(readmeDepSentence) && /`done`/.test(readmeDepSentence),
+  'README dependency sentence must name done, needs-human, and needs-review');
+
 console.log('briefs.test.js: all checks passed');

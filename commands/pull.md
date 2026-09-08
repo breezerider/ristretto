@@ -1,5 +1,5 @@
 ---
-description: Pull one feature from the roadmap and implement it cleanly in auto mode against the current code, then commit on a feature branch and close it. Pass "nocommit" to skip committing.
+description: Builds a planned feature — normal path, with a planner.
 argument-hint: <feature ID, or "next"> [nocommit]
 ---
 
