@@ -22,7 +22,7 @@ Read `docs/ristretto/roadmap.md`; take it at its word, don't second-guess it aga
 - **`done`** → stop, tell the user, cite the Updated date / commit. Do not re-implement.
 - **`blocked`** → surface the recorded reason, ask whether to proceed anyway — the block may have been resolved outside the roadmap.
 - **`needs-human`** → the code is already built and committed; read its section in `docs/ristretto/manual-checks.md`. Every `proves` line ticked `- [x]` → this is a check re-run: read `${CLAUDE_PLUGIN_ROOT}/briefs/closer.md` and follow it yourself to prove the pending criteria and close it. Still unticked lines → print them and stop.
-- **`needs-review`** → `brew` built and committed it green but left findings open. Read `## Open findings` and any `decision taken:` line in `## Evidence` of `docs/ristretto/plans/archived/<FEATURE-ID>.md`; show them and ask which to fix. On your ruling, work them on a branch as an ordinary change (steps 6–11 below, treating the findings as the implementer's input), then rewrite `## Open findings` to only what remains — clearing it closes the row `done`. Findings you decide against are deleted with a one-line note why.
+- **`needs-review`** → `brew` built and committed it green but left findings open. Read `## Open findings` and any `decision taken:` line in `## Evidence` of `docs/ristretto/plans/archived/<FEATURE-ID>.md`; show them and ask which to fix. On your ruling, work them on a branch as an ordinary change (steps 6–12 below, treating the findings as the implementer's input), then rewrite `## Open findings` to only what remains — clearing it closes the row `done`. Findings you decide against are deleted with a one-line note why.
 - **`next`** → the top `planned` row whose `Depends:` are all satisfied. `done`, `needs-human`, and `needs-review` all satisfy a dependency — their code is built, committed, and gated, only a step or an opinion is outstanding. Only `blocked` withholds. If every `planned` row is blocked, stop and say what each is waiting on. A named ID (not `next`) with an unfinished `Depends:` → warn and ask before proceeding.
 
 ## 2. Read the plan
@@ -69,7 +69,15 @@ Read `${CLAUDE_PLUGIN_ROOT}/briefs/implementer.md` and follow it yourself.
 
 `blocked: <reason>` → set the roadmap row `blocked` with that reason, disarm (step 12), stop. `ready:` or `needs-human:` → continue to review.
 
-## 9. Review — capped at 2 rounds, never a ping-pong
+## 9. Prove the whole repo
+
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.js" verify
+```
+
+The implementer's `prove` only ever proved the feature's own files — `verify` runs lint, typecheck, and the *full* test gate, ignoring the scoped shortcut and the green-tree cache. Exit 0 → continue. Exit 1 → fix until green — you are the implementer here too (read `${CLAUDE_PLUGIN_ROOT}/briefs/implementer.md`'s rules; no gate is ever weakened). A gate killed as hung is unverified, not proven broken — find what it's waiting on before going on.
+
+## 10. Review — capped at 2 rounds, never a ping-pong
 
 Skip only when the diff is trivial: roughly < 15 changed lines and no new logic (no new functions, branches, or loops). When in doubt, review.
 
@@ -79,17 +87,17 @@ Dispatch a **reviewer** subagent — fresh context, capable model:
 > Diff: <files touched / branch vs merge-base>
 > Read `${CLAUDE_PLUGIN_ROOT}/briefs/reviewer.md` and follow it.
 
-- `review: clean` or `review: notes-only` → proceed to close (step 10). The notes and leans get copied verbatim into `## Open findings` there — do not fix them, do not round for them.
+- `review: clean` or `review: notes-only` → proceed to close (step 11). The notes and leans get copied verbatim into `## Open findings` there — do not fix them, do not round for them.
 - `review: blocking (n)` → fix every block (read `${CLAUDE_PLUGIN_ROOT}/briefs/implementer.md` and follow it yourself as the fixer, findings in hand instead of a build plan; clear notes and leans in the same pass unless a fix is riskier than the win, and say which you left). Then dispatch a **second, fresh** reviewer — round 2 only — to verify the round-1 blocks and any new block the fixes introduced in files the fixer touched; a block elsewhere is reported, not a new round.
 - Blocks still open after round 2 → hard stop: do **not** commit. Surface the findings to the user and leave the work in the tree — never `git restore` it, the gates are green and only an opinion is unresolved. Disarm (step 12) and stop.
 
   **`pull` stops here where `brew` would close `needs-review`, and the difference is you** — a question asked now is answered in seconds.
 
-## 10. Close
+## 11. Close
 
 Read `${CLAUDE_PLUGIN_ROOT}/briefs/closer.md` and follow it yourself. If `nocommit` was passed, skip the commit and say the changes are left uncommitted for the user to commit themselves; everything else in the brief — `Provides:`, `## Evidence`, archiving, the roadmap row — still applies.
 
-## 11. Disarm
+## 12. Disarm
 
 ```
 node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.js" disarm
