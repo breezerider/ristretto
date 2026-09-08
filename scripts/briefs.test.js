@@ -140,7 +140,7 @@ assert.ok(!/`easy`\s*→|Tier.*easy.*→/.test(pull), 'pull is the normal path �
 
 // 16. shot is the easy path against an existing plan — it no longer writes one.
 const shot = read('commands/shot.md');
-assert.ok(words(shot) < 700, `shot.md is ${words(shot)} words`);
+assert.ok(words(shot) < 800, `shot.md is ${words(shot)} words`);
 assert.ok(/implementer\.md/.test(shot), 'shot must read the implementer brief');
 assert.ok(!/Add a `planned` row|in prep's format/.test(shot), 'shot no longer writes plans — prep always runs first');
 assert.ok(/prep/.test(shot), 'shot must say prep runs first');

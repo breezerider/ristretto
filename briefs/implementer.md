@@ -4,7 +4,7 @@ Read `briefs/common.md` first — it binds you before anything below does.
 
 ## Find your build plan
 
-Look for `.ristretto/build/<FEATURE-ID>.md`. If it exists, that's your plan, written against the current code minutes ago — implement it, do not re-plan. If it doesn't exist, this is the easy path: before writing anything, expand `docs/ristretto/plans/<FEATURE-ID>.md`'s `## Contract` yourself against the current code — real file paths, real names and signatures, the test cases that prove each criterion. A missing build-plan file is the easy path, never an error to report. Below, "the build plan" means whichever of the two you have.
+Look for `.ristretto/build/<FEATURE-ID>.md`. If it exists, that's your plan, written against the current code minutes ago — implement it, do not re-plan. If it doesn't exist, this is the easy path: before writing anything, expand `docs/ristretto/plans/<FEATURE-ID>.md`'s `## Contract` yourself against the current code — real file paths, real names and signatures, the test cases that prove each criterion — and write each surviving manual check (common.md's reach test decides which survive) into `docs/ristretto/manual-checks.md`, in the line format `briefs/planner.md` gives. A missing build-plan file is the easy path, never an error to report. Below, "the build plan" means whichever of the two you have.
 
 ## Tests first, red first
 

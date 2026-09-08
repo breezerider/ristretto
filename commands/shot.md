@@ -68,8 +68,8 @@ Skip only if trivial (< 15 lines, no new logic); when in doubt, review. Dispatch
 > Read `${CLAUDE_PLUGIN_ROOT}/briefs/reviewer.md` and follow it.
 
 - `clean` / `notes-only` → close; copy notes/leans verbatim into `## Open findings`.
-- `blocking (n)` → fix every block, following `${CLAUDE_PLUGIN_ROOT}/briefs/implementer.md` as the fixer, findings in hand; then one fresh round-2 reviewer to verify.
-- Still open after round 2 → stop, don't commit; leave the tree as is — never `git restore` it. Disarm, stop.
+- `blocking (n)` → fix every block, following `${CLAUDE_PLUGIN_ROOT}/briefs/implementer.md` as the fixer, findings in hand. Then dispatch a **second, fresh** reviewer — round 2 only — scoped to verify the round-1 blocks and any new block the fixes introduced in files the fixer touched; a block elsewhere is reported, not fixed, and goes to `## Open findings` — it does not start a round 3. Round 2 reports no new notes or leans.
+- Blocks still open after round 2 → hard stop: do not commit. Surface the findings to the user and leave the tree as is — never `git restore` it. Disarm, stop.
 
 ## 9. Close and disarm
 
