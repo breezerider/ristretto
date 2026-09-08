@@ -69,4 +69,12 @@ for (const c of COMMANDS) {
   assert.ok(!read(c).includes('decisions.md'), `${c} must not send anyone to the anecdote archive`);
 }
 
+// 7. common.md carries what more than one role needs, and stays a reference not an essay.
+const common = read('briefs/common.md');
+for (const fp of ['tick a box', 'about production', 'cheapest level', 'per criterion',
+                  'weaken, skip, or delete']) {
+  assert.ok(common.includes(fp), `common.md must carry "${fp}"`);
+}
+assert.ok(words(common) < 450, `common.md is ${words(common)} words — it is shared, so every role pays it`);
+
 console.log('briefs.test.js: all checks passed');
