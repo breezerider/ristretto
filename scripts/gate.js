@@ -1080,17 +1080,50 @@ function hangAdvice(gate, result, usedSec) {
 // --- Config problems the runner can see for itself. ---
 // Each of these was a paragraph in a doc that a human had to read and obey; saying it here, with
 // the actual command in view, is strictly better — and it is the difference between a rule and a
-// check. `preflight` (true at `verify`, false in the `full` hook) gates the three STATIC checks —
-// formatPaths, silencing flags, route gaps — to `verify` only: they are pre-flight advice about
-// the config itself, not something a human should see repeated on every green subagent stop. The
-// two duration hints below read a measurement that only exists after a run, so both callers keep
-// them — the hook is in fact how a repo that skips `verify` ever hears its own suite is slow.
-function auditConfig({ preflight }) {
-  if (preflight && gates.format && !(Array.isArray(gates.formatPaths) && gates.formatPaths.length)) {
+// check. Split in two by what each half needs: the three STATIC checks below — formatPaths,
+// silencing flags, route gaps — are true of the config itself, no gate run required, so `verify`
+// calls this before its cache short-circuit, the one place a cache hit would otherwise never run
+// them at all. The `full` hook never calls this one: repeating config advice on every green
+// subagent stop is noise, not a pre-flight.
+function auditStaticConfig() {
+  if (gates.format && !(Array.isArray(gates.formatPaths) && gates.formatPaths.length)) {
     console.error('ristretto: a "format" gate is set but "formatPaths" is not — the formatter will rewrite');
     console.error('  every file anyone edits, including docs and generated files. List what it is canonical for.');
   }
 
+  const QUIET = [/(^|\s)-q(\s|$)/, /--no-progress/, /--quiet/, /--reporter[= ](silent|dot|summary)/];
+  for (const key of ['test', 'testChanged']) {
+    const cmds = Array.isArray(gates[key]) ? gates[key].map((route) => (route && route.cmd) || '') : [gates[key] || ''];
+    for (const cmd of cmds) {
+      if (QUIET.some((re) => re.test(cmd))) {
+        console.error(`ristretto: "${key}" carries a flag that silences the runner: ${cmd}`);
+        console.error('  Hang detection reads the gate\'s output — a mute suite is indistinguishable from a wedged');
+        console.error('  one for its whole run, and raising "silence" cannot help past the watchdog. Keep the stream.');
+        break;
+      }
+    }
+  }
+
+  // Every changed path this config's routes don't cover. Reported at pre-flight, where it costs
+  // nothing to hear about it — falling back to the full suite is safe, but silent, and only shows
+  // up later as a loop that unexpectedly drags. Reuses `matchesAny`, the same matcher `testChanged`
+  // routing uses at runtime, rather than a second glob implementation that could drift from it.
+  if (Array.isArray(gates.testChanged)) {
+    const paths = dirtyPaths() || [];
+    const uncovered = paths.filter((p) => !gates.testChanged.some((entry) => entry && matchesAny(p, entry.match)));
+    if (uncovered.length) {
+      console.error(`ristretto: ${uncovered.length} changed path(s) match no "testChanged" route and fall back to the full suite:`);
+      for (const p of uncovered.slice(0, 10)) console.error(`  ${p}`);
+      console.error('  Safe, but slow — and invisible until a run goes quiet. Completing the routes is what keeps the loop fast.');
+    }
+  }
+}
+
+// The two duration hints only — both need a gate loop's own measurement, so both callers place
+// this after their loop. The three static checks live in `auditStaticConfig` instead: `verify`
+// calls that one before its cache short-circuit too, which this function's callers never reach
+// on a cache hit, and calling it again here would print the same advice twice on a real run.
+function auditConfig() {
   // `<key>:ms` — the gate's own wall-clock length on its last green run, recorded by runGates
   // beside the quiet record. NOT observedQuiet[key]: that is the longest SILENT GAP of a green
   // run, not the run's length, and reads as ~1s even on a ten-minute suite that talks the whole
@@ -1113,35 +1146,6 @@ function auditConfig({ preflight }) {
     console.error('  Most often it dropped the parallelism the full "test" gate has: compare the two commands in .ristretto.json');
     console.error('  and give the scoped one the same flags (-n auto, --parallel, -T, ...). A scoped run that is slower than the');
     console.error('  whole suite is worse than no scoping at all. Otherwise the route is matching more than the feature touched.');
-  }
-
-  if (preflight) {
-    const QUIET = [/(^|\s)-q(\s|$)/, /--no-progress/, /--quiet/, /--reporter[= ](silent|dot|summary)/];
-    for (const key of ['test', 'testChanged']) {
-      const cmds = Array.isArray(gates[key]) ? gates[key].map((route) => (route && route.cmd) || '') : [gates[key] || ''];
-      for (const cmd of cmds) {
-        if (QUIET.some((re) => re.test(cmd))) {
-          console.error(`ristretto: "${key}" carries a flag that silences the runner: ${cmd}`);
-          console.error('  Hang detection reads the gate\'s output — a mute suite is indistinguishable from a wedged');
-          console.error('  one for its whole run, and raising "silence" cannot help past the watchdog. Keep the stream.');
-          break;
-        }
-      }
-    }
-
-    // Every changed path this config's routes don't cover. Reported at pre-flight, where it costs
-    // nothing to hear about it — falling back to the full suite is safe, but silent, and only shows
-    // up later as a loop that unexpectedly drags. Reuses `matchesAny`, the same matcher `testChanged`
-    // routing uses at runtime, rather than a second glob implementation that could drift from it.
-    if (Array.isArray(gates.testChanged)) {
-      const paths = dirtyPaths() || [];
-      const uncovered = paths.filter((p) => !gates.testChanged.some((entry) => entry && matchesAny(p, entry.match)));
-      if (uncovered.length) {
-        console.error(`ristretto: ${uncovered.length} changed path(s) match no "testChanged" route and fall back to the full suite:`);
-        for (const p of uncovered.slice(0, 10)) console.error(`  ${p}`);
-        console.error('  Safe, but slow — and invisible until a run goes quiet. Completing the routes is what keeps the loop fast.');
-      }
-    }
   }
 }
 
@@ -1417,6 +1421,7 @@ async function main() {
     // already, and the cached path is exactly when a resumed batch would otherwise never hear it.
     auditScopedGates();
     auditSilenceBudgets();
+    auditStaticConfig();
     // A pre-flight repeated on an unchanged tree proves nothing the first one didn't. `cached`
     // is how brew asks for that verdict instead of re-paying for it after a session restart.
     if (CACHED) {
@@ -1445,8 +1450,8 @@ async function main() {
     }
     // After the loop, not before: the slow-suite/slow-scoped checks inside read the duration this
     // very run just recorded, not only a stale number left over from whichever run happened last.
-    // preflight: true — verify is the pre-flight, so all five checks print here.
-    auditConfig({ preflight: true });
+    // The three static checks already ran above, before the cache short-circuit.
+    auditConfig();
     if (!r.results.length) {
       console.log('gates: none configured — nothing to verify');
       process.exit(0);
@@ -1563,9 +1568,9 @@ async function main() {
 
     if (r.ok) {
       if (driftNote) console.error(driftNote.trim());
-      // preflight: false — the hook keeps only the two duration hints; the three static checks
-      // are pre-flight advice about the config itself, not hook noise on every green stop.
-      auditConfig({ preflight: false });
+      // The hook only ever sees the two duration hints — the three static checks are pre-flight
+      // advice about the config itself, not hook noise on every green stop.
+      auditConfig();
       try { fs.unlinkSync(retriesPath); } catch { /* never existed */ }
       process.exit(0);
     }

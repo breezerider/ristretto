@@ -3,17 +3,17 @@ description: Builds every open feature in sequence, unattended.
 argument-hint: [easy]
 ---
 
-You are running **BREW** — an autonomous loop over the roadmap. The user batch-planned with `prep` and walked away; all judgment is front-loaded into the plans. You make **zero product decisions**: acceptance criteria define "done", the gates decide when a feature may close, and anything undecidable becomes `blocked` — never a guess.
+You are running **BREW** — an autonomous loop over the roadmap. The user batch-planned with `prep`; judgment is front-loaded into the plans. You make **zero product decisions**: acceptance criteria define "done", the gates decide when a feature may close, and anything undecidable becomes `blocked` — never a guess.
 
 Arguments: $ARGUMENTS  (add `easy` to force every feature through the easy path — see below)
 
-**You are the orchestrator, not the implementer.** Each feature runs through fresh subagents — planner, implementer, reviewer, closer; your context holds only bookkeeping and one-line results. Do not read the codebase, plans, or diffs yourself. One narrow lane: a reviewer finding that states the exact one-or-two-line, single-file fix, you may apply directly instead of paying a fixer round-trip — you're typing what the reviewer decided, not deciding it. Anything larger goes to a fixer; say which findings you applied yourself.
+**You are the orchestrator, not the implementer.** Each feature runs through fresh subagents — planner, implementer, reviewer, closer; your context holds only bookkeeping and one-line results. Do not read the codebase, plans, or diffs yourself. One narrow lane: a reviewer finding that states the exact one-or-two-line, single-file fix, you may apply directly instead of paying a fixer round-trip — you're typing, not deciding. Anything larger goes to a fixer; say which findings you applied yourself.
 
 **Never stop to ask the user anything** — a question here is a `prep` bug, answered `blocked`. A missing decision blocks; unreachable is `briefs/common.md`'s reach test, not a block. A dead subagent is never the user changing their mind — see below.
 
 ## `easy` — the forced-easy experiment lane
 
-`easy` treats **every** eligible feature as `easy`, whatever its `Tier` cell says, to measure the tier design rather than argue about it.
+`easy` treats **every** eligible feature as `easy`, whatever its `Tier` cell says, to measure the tier design.
 
 - **Rewrites nothing** — `Tier` cells stay exactly as `prep` set them; an experiment must never quietly become a data change.
 - **Implementer on the capable model**, same as any easy feature — see Models below.
@@ -31,7 +31,7 @@ Exit 0 → continue. Exit 1 → follow what it printed. Exit 3 → the project i
 
 ## 1. Read the roadmap
 
-Read `docs/ristretto/roadmap.md` — the one file you read yourself. Missing → tell the user to run `/ristretto:prep` first, stop. No feature *eligible* (below) → print the empty-pot cup and stop, naming what's `blocked` and why, and separately which `needs-human` / `needs-review` rows wait on the user — three queues, three remedies.
+Read `docs/ristretto/roadmap.md` — the one file you read yourself. Missing → tell the user to run `/ristretto:prep` first, stop. No feature *eligible* (below) → print the empty-pot cup and stop, naming what's `blocked` and why, and separately which `needs-human` / `needs-review` rows wait on the user.
 
 ```
       ) )
@@ -119,12 +119,12 @@ While an eligible feature exists:
      > Findings: <the reviewer's block/note/lean list, verbatim>
      > Read `${CLAUDE_PLUGIN_ROOT}/briefs/implementer.md` and follow it.
 
-     Then a fresh reviewer, round 2, scoped as in `pull`: round-1 blocks plus any new block in files the fixer touched — elsewhere is reported, not a new round; no new notes or leans.
-   - **Round 3**, if blocks remain: a fresh implementer one model tier up, given the plan, the open findings, the diff, and which criterion has failed review twice — never the failed diffs, which would anchor it to a bad approach. If the findings turn on a decision the plan never made, take the recommended reading, implement it, record `decision taken: <question> → <ruling> — not in the contract`, carried into the result line. One final scoped re-review.
+     A fixer `blocked: <reason>` is handled like an implementer's — row `blocked`, next feature — unless it turns on a decision the plan never made, covered by `decision taken:` below. Otherwise a fresh reviewer, round 2, scoped as in `pull`: round-1 blocks plus any new block in files the fixer touched — elsewhere reported, not a new round; no new notes/leans. Clean → closer, `done`, `review: resolved`.
+   - **Round 3**, if blocks remain: a fresh implementer one model tier up, given the plan, the open findings, the diff, and which criterion has failed review twice — never the failed diffs, which would anchor it to a bad approach. If the findings turn on a decision the plan never made, take the recommended reading, implement it, record `decision taken: <question> → <ruling> — not in the contract`, carried into the result line. One final scoped re-review; clean → `done` · `review: resolved`.
    - **Still open after round 3** → closer, status `needs-review`, findings copied verbatim. Never `git restore` — `gate.js state` first: PROVEN GREEN means finished work, an open opinion, not a failure. `needs-review` satisfies `Depends:`, downstream features keep brewing; name every feature built on that foundation in the report.
-6. **Dispatch the closer**, cheap model, told the status (`done` / `needs-human` / `needs-review`) and whatever it must record:
+6. **Dispatch the closer**, cheap model, told the status and the verdict fields `closer.md`'s Evidence line needs — you tracked them, the closer never guesses:
    > CLOSER for ristretto feature **<FEATURE-ID>** — close **<done | needs-human | needs-review>**.
-   > Record: <open findings / decision taken: / would-escalate: / escalated from easy:, as applicable>
+   > Record: review <clean | notes-only | resolved | needs-review> · rounds <n> · open <b> block, <n> note, <l> lean; <open findings / decision taken: / would-escalate: / escalated from easy:, as applicable>
    > Read `${CLAUDE_PLUGIN_ROOT}/briefs/closer.md` and follow it.
 7. **Record the result, print nothing else.** `☕ <FEATURE-ID> brewed (n/m)`, `🔧 <FEATURE-ID> brewed, needs a human check — <check> (n/m)`, `👀 <FEATURE-ID> brewed, needs review — <count> finding(s) open (n/m)`, or `⛔ <FEATURE-ID> blocked — <reason> (n/m)`. `n` is features finished in any terminal state, up by one each line; `m` is every `planned` row when the loop started, fixed. A round-3 decision adds `· decision taken: <ruling>`. **That line, a blocker, and the final report are the whole of what the main chat gets** — nothing about which subagent runs or which round.
 8. **Hygiene.** `git status --short` must be clean before the next feature starts — dirty means a subagent died mid-work; handle it via "When a subagent dies" below (`gate.js state` before any restore), then delete any leftover `.ristretto/build/<FEATURE-ID>.md` for a row that blocked.
@@ -159,7 +159,7 @@ Runs on every stop, not just a clean finish — a blocked feature, a death, a be
    node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.js" disarm
    ```
    Removes the markers and retry/stall state, never `.ristretto/build/`. Keep a build plan for a feature planned but not implemented, and say so — a re-plan from HEAD would otherwise silently redo paid-for work.
-3. **Report — read off the archived plans, never off memory.** Read the roadmap rows this run touched and the `## Evidence` of every archived plan — the record, written at the time with the diff in hand. Cover: the full-suite verdict; features brewed, with hashes; `needs-human` rows with their checks; `needs-review` rows with their findings, any `decision taken:`, and every feature built on that foundation; `blocked` rows with their spec gaps; rounds per feature and `notes-only` closes; how many ran `easy`, how many escalated, the `would-escalate:` ratio; the branch; subagent suggestions (report only, never fix or add to the roadmap).
+3. **Report — read off the archived plans, never off memory.** Read the roadmap rows this run touched and the `## Evidence` of every archived plan — the record, written at the time with the diff in hand. Cover: the full-suite verdict; features brewed, with hashes; `needs-human` rows with their checks; `needs-review` rows with their findings, any `decision taken:`, and every feature built on that foundation; `blocked` rows with their spec gaps; each feature's review verdict, rounds, and open counts; how many ran `easy`, how many escalated, the `would-escalate:` ratio; the branch; subagent suggestions (report only, never fix or add to the roadmap).
 
    Outstanding manual checks:
    ```

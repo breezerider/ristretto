@@ -1578,4 +1578,17 @@ assert.ok(!/formatPaths/.test(r.stderr),
 r = gate(dir, 'verify');
 assert.ok(/formatPaths/.test(r.stderr), 'verify must still name the missing formatPaths — got: ' + r.stderr.slice(0, 300));
 
+// 148. `verify cached` short-circuits before the post-loop auditConfig call, so a resumed batch
+//      that keeps hitting cache would otherwise never hear a missing formatPaths at all. The three
+//      static checks now run before that short-circuit too, and the cached-green verdict must still
+//      stand.
+dir = gitTmpRepo(JSON.stringify({ gates: { format: PASS, test: COUNT } }));
+assert.strictEqual(gate(dir, 'verify').status, 0, 'the first verify must run and pass');
+assert.strictEqual(runs(dir), 1, 'the first verify must actually execute the suite');
+r = gate(dir, 'verify', '{}', {}, 'cached');
+assert.strictEqual(r.status, 0, 'a cache hit missing formatPaths must still exit 0');
+assert.strictEqual(runs(dir), 1, 'a cache hit must not re-run the suite');
+assert.ok(r.stdout.includes('cached green'), 'a cache hit must still say it was cached');
+assert.ok(/formatPaths/.test(r.stderr), 'a cache hit must still name the missing formatPaths — got: ' + r.stderr.slice(0, 300));
+
 console.log('gate.test.js: all checks passed');
