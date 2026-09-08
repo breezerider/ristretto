@@ -110,4 +110,23 @@ const closer = read('briefs/closer.md');
 assert.ok(closer.includes('rounds: <n>') && closer.includes('open: <b> block'), 'closer.md must give the Evidence review line as a fixed template');
 assert.ok(closer.includes('git add -A') && closer.includes('plain ASCII'), 'the git rules live in closer.md');
 
+// 13. The config reference keeps only what gate.js cannot detect.
+const cfg = read('reference/config.md');
+assert.ok(words(cfg) < 700, `reference/config.md is ${words(cfg)} words — pull.md carried ~2500`);
+assert.ok(/gate\.js" verify|gate\.js verify/.test(cfg), 'it must point at verify for everything detectable');
+for (const gone of ['--no-progress', 'formatPaths must', 'route them instead']) {
+  assert.ok(!cfg.includes(gone), `"${gone}" is detected by gate.js now — it must not be text`);
+}
+
+// 14. The anecdotes are archived, out of every dispatch path.
+const dec = read('docs/decisions.md');
+for (const a of ['16.8', '289', '2.6 minutes']) {
+  assert.ok(dec.includes(a), `docs/decisions.md must keep the "${a}" incident`);
+}
+for (const f of [...COMMANDS, ...BRIEFS]) {
+  for (const a of ['16.8', '289-second']) {
+    assert.ok(!read(f).includes(a), `${f} must not carry the "${a}" anecdote`);
+  }
+}
+
 console.log('briefs.test.js: all checks passed');
