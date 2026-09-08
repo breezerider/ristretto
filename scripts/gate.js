@@ -106,6 +106,25 @@ function markerIdleMs(p) {
   try { return Date.now() - fs.statSync(p).mtimeMs; } catch { return null; }
 }
 
+// Who owns this run. `arm` runs as a command and has CLAUDE_CODE_SESSION_ID; a hook always
+// has session_id on stdin. Either is enough — and an empty marker is claimed by the first
+// hook that sees it, so the id never has to be known at arm time.
+function mySession() {
+  return process.env.CLAUDE_CODE_SESSION_ID || hook.session_id || '';
+}
+
+// '' means nobody has claimed it yet, null means there is no marker.
+function markerOwner(p) {
+  try { return fs.readFileSync(p, 'utf8').trim(); } catch { return null; }
+}
+
+function ownerLabel(p) {
+  const owner = markerOwner(p);
+  if (owner === null) return null;
+  if (owner === '') return 'unclaimed';
+  return owner === mySession() ? 'this session' : 'ANOTHER session';
+}
+
 // Seconds a gate may produce NO output before it's treated as hung.
 // lint and typecheck get a long rope on purpose: whole-project analysers print nothing at all
 // until they finish — a type checker, a linter over the whole tree, a compile step — so their
@@ -222,10 +241,12 @@ const orchestratingPath = path.join(projectDir, '.ristretto', 'orchestrating');
 const HOUSE_RULE_FILES = new Set(['claude.md', 'agents.md']);
 
 // No config → ristretto not set up in this repo → never interfere.
-if (!fs.existsSync(configPath)) process.exit(0);
+// `state` answers questions about a repo that may not be set up yet — that is a legitimate
+// answer, not a reason to say nothing.
+if (!fs.existsSync(configPath) && MODE !== 'state') process.exit(0);
 
 let hook = {};
-if (MODE !== 'verify') {
+if (MODE !== 'verify' && MODE !== 'state') {
   try { hook = JSON.parse(fs.readFileSync(0, 'utf8')); } catch { /* no/bad stdin is fine */ }
 }
 
@@ -1057,6 +1078,56 @@ async function main() {
       // or it isn't, so one line is the whole story and a line per keystroke is noise.
       reportFormat(result);
     }
+    process.exit(0);
+  }
+
+  // Read-only: what is armed, whose it is, and what a dead run left behind. Nothing here
+  // creates, deletes, or refreshes anything — a command that reports state must never be the
+  // reason the state changes.
+  if (MODE === 'state') {
+    for (const [label, p] of [['pulling', markerPath], ['orchestrating', orchestratingPath]]) {
+      const who = ownerLabel(p);
+      if (who === null) { console.log(`${label}: not armed`); continue; }
+      const idle = markerIdleMs(p);
+      const age = idle === null ? 'unknown' : `${Math.round(idle / 1000)}s ago`;
+      console.log(`${label}: armed by ${who}, last activity ${age}`);
+    }
+
+    const paths = dirtyPaths();
+    if (paths === null) {
+      console.log('tree: not a git repo, or git is unavailable');
+    } else if (paths.length === 0) {
+      console.log('tree: clean');
+    } else {
+      let lastGreen = null;
+      try { lastGreen = fs.readFileSync(greenPath, 'utf8'); } catch { /* nothing proven yet */ }
+      const fp = treeFingerprint();
+      const proven = fp !== null && fp === lastGreen;
+      console.log(`tree: ${paths.length} changed path(s) — ${proven ? 'PROVEN GREEN, commit it rather than discarding it' : 'unproven'}`);
+      for (const p of paths.slice(0, 20)) console.log(`  ${p}`);
+      if (paths.length > 20) console.log(`  … and ${paths.length - 20} more`);
+    }
+
+    let builds = [];
+    try { builds = fs.readdirSync(path.join(projectDir, '.ristretto', 'build')).filter((f) => f.endsWith('.md')); } catch { /* none */ }
+    if (builds.length) console.log(`build plans left behind: ${builds.join(', ')}`);
+
+    // `.ristretto/` collects more than gate.js writes — subagents drop logs, junit dumps, and
+    // scratch scripts there that nothing here ever reads. A pre-flight that only names build/
+    // makes those invisible; everything gate.js doesn't own gets named instead, so a stale
+    // directory reads as the fifty-odd files it actually is rather than as tidy.
+    const known = new Set([
+      'pulling', 'orchestrating', 'gate-retries', 'gate-green', 'gate-stalled',
+      'gate-tools.json', 'gate-lock', 'gate-quiet.json', 'format-broken', 'baseline.json', 'build',
+    ]);
+    for (const rel of allReportPaths()) known.add(path.basename(rel));
+    let entries = [];
+    try { entries = fs.readdirSync(path.join(projectDir, '.ristretto')); } catch { /* not armed yet */ }
+    const unrecognised = entries.filter((f) => !known.has(f));
+    if (unrecognised.length) {
+      console.log(`unrecognised: ${unrecognised.length} file(s) — ${unrecognised.slice(0, 10).join(', ')}`);
+    }
+
     process.exit(0);
   }
 

@@ -1241,4 +1241,39 @@ r = gate(dir, 'verify');
 assert.ok(!/not being honoured|will not honour/.test(r.stderr),
   'a budget inside the ceiling must produce no audit at all — got: ' + r.stderr.slice(0, 300));
 
+// 110. `state` reports an unarmed repo without touching anything, and never fails.
+dir = tmpRepo(JSON.stringify({ gates: { test: PASS } }));
+r = gate(dir, 'state');
+assert.strictEqual(r.status, 0, 'state must always exit 0');
+assert.ok(/pulling: not armed/.test(r.stdout), 'state must say pulling is not armed — got: ' + r.stdout);
+assert.ok(/orchestrating: not armed/.test(r.stdout), 'state must report orchestrating too');
+assert.ok(!fs.existsSync(path.join(dir, '.ristretto', 'pulling')), 'state must create nothing');
+
+// 111. An armed marker is reported with its owner and how long it has been idle.
+arm(dir);
+fs.writeFileSync(path.join(dir, '.ristretto', 'pulling'), 'sess-aaa');
+r = gate(dir, 'state', '{}', { CLAUDE_CODE_SESSION_ID: 'sess-aaa' });
+assert.ok(/pulling: armed by this session/.test(r.stdout), 'own marker must read as this session — got: ' + r.stdout);
+
+// 112. A marker from someone else says so plainly — this is the stale-marker symptom.
+r = gate(dir, 'state', '{}', { CLAUDE_CODE_SESSION_ID: 'sess-bbb' });
+assert.ok(/pulling: armed by ANOTHER session/.test(r.stdout), 'foreign marker must be named — got: ' + r.stdout);
+
+// 113. Leftover build plans are named — a new run must be able to see what a dead one left.
+fs.mkdirSync(path.join(dir, '.ristretto', 'build'), { recursive: true });
+fs.writeFileSync(path.join(dir, '.ristretto', 'build', 'BREW-9.md'), 'x');
+r = gate(dir, 'state');
+assert.ok(/BREW-9/.test(r.stdout), 'state must name leftover build plans — got: ' + r.stdout);
+
+// 114. `.ristretto/` collects more than gate.js writes — subagent logs, junit dumps, scratch
+//      scripts. Files gate.js knows about (including every configured report path) must not be
+//      called out; everything else must be, by name, so a pre-flight actually shows what a dead
+//      run left rather than only the slice gate.js recognises.
+fs.writeFileSync(path.join(dir, '.ristretto', 'gate-green'), 'deadbeef');
+fs.writeFileSync(path.join(dir, '.ristretto', 'scratch.log'), 'x');
+r = gate(dir, 'state');
+assert.ok(/unrecognised/.test(r.stdout), 'state must call out files it does not own — got: ' + r.stdout);
+assert.ok(r.stdout.includes('scratch.log'), 'the unrecognised file must be named — got: ' + r.stdout);
+assert.ok(!r.stdout.includes('gate-green'), 'a file gate.js owns must not be reported as unrecognised — got: ' + r.stdout);
+
 console.log('gate.test.js: all checks passed');
