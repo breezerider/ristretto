@@ -260,7 +260,7 @@ const HOUSE_RULE_FILES = new Set(['claude.md', 'agents.md']);
 if (!fs.existsSync(configPath) && MODE !== 'state' && MODE !== 'arm' && MODE !== 'disarm') process.exit(0);
 
 let hook = {};
-if (MODE !== 'verify' && MODE !== 'state' && MODE !== 'arm' && MODE !== 'disarm') {
+if (MODE !== 'verify' && MODE !== 'state' && MODE !== 'arm' && MODE !== 'disarm' && MODE !== 'prove') {
   try { hook = JSON.parse(fs.readFileSync(0, 'utf8')); } catch { /* no/bad stdin is fine */ }
 }
 
@@ -1064,6 +1064,117 @@ function hangAdvice(gate, result, usedSec) {
   return lines.join('\n');
 }
 
+// The gate-running core: acquire the lock, run the configured list against the tree, attribute
+// each result against the baseline, and on a clean pass write the green fingerprint. Every mode
+// that actually executes gates shares this one — `verify`, the `full` hook, and `prove` differ
+// only in the switches below. Everything else about a mode — whether it may run at all, what a
+// failure does to the retry budget, markers, ownership, the orchestrator exemption — is the
+// caller's job, not this one's, and stays wrapped around the call.
+//
+//   scoped             gateList(scoped) — the fast, feature-sized list vs the whole repo.
+//   stopOnStall         a stall ends the run right here, reported to the caller immediately (the
+//                       hook, `prove`) vs recorded and the remaining gates still run (`verify`,
+//                       which owes a full report of everything it found).
+//   mayCreateBaseline    only a caller that deliberately chose to run (`verify`) may capture a
+//                       first-ever baseline; every other caller only ever updates one that exists.
+//
+// Returns `ok: true` on a clean pass (the fingerprint has been written), `false` on a real
+// failure or a stopped stall (see `stalled`), or `null` when the lock itself was never obtained —
+// nothing ran at all. `failures` is the text a caller prints; `results` is the per-gate ✓/✗
+// summary `verify` shows.
+async function runGates({ scoped, stopOnStall, mayCreateBaseline, label }) {
+  if (!(await acquireLock(label))) return { ok: null, stalled: false, results: [], failures: '' };
+
+  const passStartedAt = Date.now();
+  const results = [];
+  let failures = '';
+  let hung = false;
+  let unscopedTestMs = 0;
+  const slowScoped = [];
+
+  for (const gate of gateList(scoped)) {
+    const gateStartedAt = Date.now();
+    const used = budget(gate);
+    for (const rel of gate.reports || []) {
+      try { fs.unlinkSync(path.join(projectDir, rel)); } catch { /* nothing to clear */ }
+    }
+    const result = await run(gate.cmd, used);
+
+    // Attribution runs whether or not the command exited 0 — a report is how a previously-failing
+    // test LEAVES the tolerated set, and skipping this on a green exit would make the ratchet able
+    // to grow and never shrink.
+    const attributed = attribute(gate);
+
+    // First capture is a deliberate act that belongs only to a caller that asked for it — never a
+    // hook, or a one-shot proof, firing mid-run.
+    if (attributed && mayCreateBaseline && loadBaseline(baselinePath) === null) {
+      saveBaseline(baselinePath, attributed.next, git('rev-parse HEAD'));
+      console.log(`ristretto: captured ${attributed.next.size} pre-existing test failure(s) as the baseline.`);
+      console.log('  These will be TOLERATED until they are fixed. Nothing may be added to this set —');
+      console.log('  a run that introduces a new failure still blocks, and a fixed test leaves for good.');
+      results.push(`${gate.label} ✓`);
+      continue;
+    }
+
+    const attributedPass = Boolean(attributed) && attributed.verdict === 'pass';
+    // Updating an existing baseline is never restricted — only creating one is.
+    if (attributedPass && loadBaseline(baselinePath) !== null) {
+      saveBaseline(baselinePath, attributed.next, git('rev-parse HEAD'));
+    }
+    if (attributed && (attributed.newFailures.length || attributed.tolerated.length)) {
+      console.error(attributionLines(attributed));
+    }
+
+    // The report outranks the exit code once there is one: a non-zero exit with no NEW failures
+    // is a suite that was already red for reasons this change did not cause, and a zero exit with
+    // new failures in the report still blocks.
+    if (attributed ? attributedPass : result === null) {
+      // Green: whatever silence this gate showed was healthy silence. That is the calibration.
+      if (result === null) recordQuiet(gate.key, lastRunMaxQuietMs);
+      // A full suite ran because nothing scoped it. Remember how long that cost.
+      if (result === null && gate.key === 'test' && !gates.testChanged) unscopedTestMs = Date.now() - gateStartedAt;
+      // And the mirror of it: a scoped gate is the fast path by definition, so one that runs this
+      // long is misconfigured.
+      const scopedMs = Date.now() - gateStartedAt;
+      if (gate.key === 'testChanged' && scopedMs >= SLOW_SCOPED_HINT_MS) {
+        slowScoped.push({ label: gate.label, secs: Math.round(scopedMs / 1000) });
+      }
+      results.push(`${gate.label} ✓`);
+      continue;
+    }
+
+    results.push(`${gate.label} ✗`);
+    if (result && (result.stalled || result.hardCapped)) {
+      hung = true;
+      if (buffered(result)) widenOnProbation(gate.key, used.silenceSec);
+      const advice = hangAdvice(gate, result, used.silenceSec);
+      if (stopOnStall) {
+        // Surface immediately rather than let the caller loop back to a gate that hangs again,
+        // burning a whole retry budget on the same wall — the exact wedge this avoids.
+        try { fs.mkdirSync(path.dirname(stalledPath), { recursive: true }); fs.writeFileSync(stalledPath, gate.label); } catch { /* best-effort */ }
+        return { ok: false, stalled: true, results, failures: advice, unscopedTestMs, slowScoped };
+      }
+      failures += `\n${advice}`;
+      continue;
+    }
+    failures += attributed
+      ? `\n${attributionLines(attributed)}`
+      : `\n--- ristretto gate '${gate.label}' FAILED ---\n${result.output.split('\n').slice(-40).join('\n')}`;
+  }
+
+  if (failures) return { ok: false, stalled: hung, results, failures, unscopedTestMs, slowScoped };
+
+  // Nothing is hung any more. A marker left from an older run keeps saying one is, with no expiry
+  // and nothing to contradict it — state that lies is worse than state that is missing.
+  try { fs.unlinkSync(stalledPath); } catch { /* never existed */ }
+  reportRunCost(Date.now() - passStartedAt);
+  const green = treeFingerprint();
+  if (green !== null) {
+    try { fs.mkdirSync(path.dirname(greenPath), { recursive: true }); fs.writeFileSync(greenPath, green); } catch { /* best-effort */ }
+  }
+  return { ok: true, stalled: false, results, failures: '', unscopedTestMs, slowScoped };
+}
+
 async function main() {
   if (MODE === 'guard') {
     const file = hook.tool_input && hook.tool_input.file_path;
@@ -1228,85 +1339,26 @@ async function main() {
     }
 
     // Full scope, no cache, no marker required. Green here is the real proof.
-    if (!(await acquireLock('verify'))) {
+    const r = await runGates({ scoped: false, stopOnStall: false, mayCreateBaseline: true, label: 'verify' });
+    if (r.ok === null) {
       console.error(`ristretto: could not start — ${lockHolder()} still holds the gate lock after ${waitSec}s.`);
       console.error('  The tree is UNVERIFIED, not red. Let that run finish, then verify again.');
       process.exit(1);
     }
-    const passStartedAt = Date.now();
-    const results = [];
-    let failures = '';
-    let hung = false;
-    for (const gate of gateList(false)) {
-      const used = budget(gate);
-      for (const rel of gate.reports || []) {
-        try { fs.unlinkSync(path.join(projectDir, rel)); } catch { /* nothing to clear */ }
-      }
-      const result = await run(gate.cmd, used);
-      if (result === null) recordQuiet(gate.key, lastRunMaxQuietMs);
-
-      // Creating a baseline and updating one are different acts, and only the first is
-      // restricted. `verify` owns creation because it is the one moment somebody chose to run
-      // this — a pre-flight, or a person at a terminal — and it says out loud what it captured.
-      const attributed = attribute(gate);
-      if (attributed) {
-        if (loadBaseline(baselinePath) === null) {
-          saveBaseline(baselinePath, attributed.next, git('rev-parse HEAD'));
-          console.log(`ristretto: captured ${attributed.next.size} pre-existing test failure(s) as the baseline.`);
-          console.log('  These will be TOLERATED until they are fixed. Nothing may be added to this set —');
-          console.log('  a run that introduces a new failure still blocks, and a fixed test leaves for good.');
-          results.push(`${gate.label} ✓`);
-          continue;
-        }
-        if (attributed.verdict === 'pass') {
-          // Never widened once one exists. A verify against a database that happens to be down
-          // would otherwise record every failure it saw as "pre-existing" and tolerate them all.
-          saveBaseline(baselinePath, attributed.next, git('rev-parse HEAD'));
-          if (attributed.tolerated.length) console.error(attributionLines(attributed));
-          results.push(`${gate.label} ✓`);
-          continue;
-        }
-        results.push(`${gate.label} ✗`);
-        failures += `\n${attributionLines(attributed)}`;
-        continue;
-      }
-
-      if (result === null) {
-        results.push(`${gate.label} ✓`);
-        continue;
-      }
-      results.push(`${gate.label} ✗`);
-      if (result.stalled || result.hardCapped) {
-        hung = true;
-        if (buffered(result)) widenOnProbation(gate.key, used.silenceSec);
-        failures += `\n${hangAdvice(gate, result, used.silenceSec)}`;
-      } else {
-        failures += `\n--- ristretto gate '${gate.label}' FAILED ---\n${result.output.split('\n').slice(-40).join('\n')}`;
-      }
-    }
-    if (!results.length) {
+    if (!r.results.length) {
       console.log('gates: none configured — nothing to verify');
       process.exit(0);
     }
-    console.log(`gates: ${results.join(' ')}`);
+    console.log(`gates: ${r.results.join(' ')}`);
     // Record and show the toolchain this verdict was produced with, so a hook that resolves
     // something else can say so instead of surfacing a mystery red on an untouched tree.
     const tools = resolveGateTools();
     const shown = Object.entries(tools).map(([tok, at]) => `${tok} → ${at || '(not found)'}`);
     if (shown.length) console.log(`tools: ${shown.join('  ')}`);
     try { fs.mkdirSync(path.dirname(toolsPath), { recursive: true }); fs.writeFileSync(toolsPath, JSON.stringify(tools, null, 2)); } catch { /* best-effort */ }
-    if (failures) {
-      console.error(failures);
+    if (r.failures) {
+      console.error(r.failures);
       process.exit(1);
-    }
-    reportRunCost(Date.now() - passStartedAt);
-    // A clean verify is the strongest green there is — seed the cache with it.
-    if (!hung) {
-      try { fs.unlinkSync(stalledPath); } catch { /* never existed */ }
-      const green = treeFingerprint();
-      if (green !== null) {
-        try { fs.mkdirSync(path.dirname(greenPath), { recursive: true }); fs.writeFileSync(greenPath, green); } catch { /* best-effort */ }
-      }
     }
     process.exit(0);
   }
@@ -1369,8 +1421,17 @@ async function main() {
     try { lastGreen = fs.readFileSync(greenPath, 'utf8'); } catch { /* no green run yet */ }
     if (fp !== null && fp === lastGreen) process.exit(0);
 
-    // Serialise. A gate that runs alongside another one measures both.
-    if (!(await acquireLock(IS_SUBAGENT ? 'subagent stop' : 'stop'))) {
+    // Did the pre-flight prove a green tree with a different toolchain than this hook runs?
+    const drift = toolDrift(resolveGateTools());
+    const driftNote = drift.length ? `\n${drift.join('\n')}\n` : '';
+
+    // Serialise. A gate that runs alongside another one measures both. (The lock-wait itself, and
+    // whether the holder may have already proven exactly this tree, both live inside runGates now
+    // — a small redundant run on the rare tree-matched-mid-wait race is the price, and it is only
+    // ever a wasted run, never a wrong verdict.)
+    const r = await runGates({ scoped: true, stopOnStall: true, mayCreateBaseline: false, label: IS_SUBAGENT ? 'subagent stop' : 'stop' });
+
+    if (r.ok === null) {
       // BLOCK, don't wave through. Unlike a hang, a lock conflict is transient and clears on its
       // own, so retrying is the right move — and exiting 0 here would let a stop through with the
       // gates never run, which is precisely the self-reporting this whole mechanism exists to
@@ -1387,98 +1448,26 @@ async function main() {
       process.exit(2);
     }
 
-    // The holder may have proven exactly the tree we came to test while we waited.
-    const afterWait = treeFingerprint();
-    try { lastGreen = fs.readFileSync(greenPath, 'utf8'); } catch { /* still nothing */ }
-    if (afterWait !== null && afterWait === lastGreen) process.exit(0);
-
-    // Did the pre-flight prove a green tree with a different toolchain than this hook runs?
-    const drift = toolDrift(resolveGateTools());
-    const driftNote = drift.length ? `\n${drift.join('\n')}\n` : '';
-
-    const passStartedAt = Date.now();
-    let failures = '';
-    let unscopedTestMs = 0;
-    const slowScoped = [];
-    for (const gate of gateList(true)) {
-      const gateStartedAt = Date.now();
-      const used = budget(gate);
-      for (const rel of gate.reports || []) {
-        try { fs.unlinkSync(path.join(projectDir, rel)); } catch { /* nothing to clear */ }
-      }
-      const result = await run(gate.cmd, used);
-
-      // Attribution runs whether or not the command exited 0. On a green run it is what lets a
-      // previously-failing test LEAVE the tolerated set; skipping it there would make the ratchet
-      // able to grow and never shrink, which is the wrong way round.
-      const attributed = attribute(gate);
-      const attributedPass = Boolean(attributed) && attributed.verdict === 'pass';
-      // A hook must never CREATE a baseline — that is a deliberate act, and `verify` owns it. It
-      // may update one that is already there.
-      if (attributedPass && loadBaseline(baselinePath) !== null) {
-        saveBaseline(baselinePath, attributed.next, git('rev-parse HEAD'));
-      }
-      if (attributed && (attributed.newFailures.length || attributed.tolerated.length)) {
-        console.error(attributionLines(attributed));
-      }
-      // The report is the verdict once there is one: a non-zero exit with no NEW failures is a
-      // suite that is red for reasons this change did not cause, and a zero exit with new
-      // failures in the report still blocks. The results outrank the exit code either way.
-      if (attributed ? attributedPass : result === null) {
-        // Green: whatever silence this gate showed was healthy silence. That is the calibration.
-        if (result === null) recordQuiet(gate.key, lastRunMaxQuietMs);
-        // A full suite ran because nothing scoped it. Remember how long that cost — the config
-        // instruction to add `testChanged` is easy to skip on a repo that already looks set up,
-        // and this is the one place that knows, from measurement, that it was worth doing.
-        if (result === null && gate.key === 'test' && !gates.testChanged) unscopedTestMs = Date.now() - gateStartedAt;
-        // And the mirror of it: a scoped gate is the fast path by definition, so one that runs
-        // this long is misconfigured. Nobody finds this by reading the config — it looks correct,
-        // and the only symptom is that the loop feels slow right up until something is killed for
-        // going quiet. Measurement is the only thing that can tell.
-        const scopedMs = Date.now() - gateStartedAt;
-        if (gate.key === 'testChanged' && scopedMs >= SLOW_SCOPED_HINT_MS) {
-          slowScoped.push({ label: gate.label, secs: Math.round(scopedMs / 1000) });
-        }
-        continue;
-      }
-      // `result` is null here only when a green command was overruled by its own report.
-      if (result && (result.stalled || result.hardCapped)) {
-        // Surface immediately. Blocking here would send the agent back to a gate that hangs
-        // again, burning the whole retry budget on the same wall — the exact wedge this avoids.
-        if (buffered(result)) widenOnProbation(gate.key, used.silenceSec);
-        try { fs.mkdirSync(path.dirname(stalledPath), { recursive: true }); fs.writeFileSync(stalledPath, gate.label); } catch { /* best-effort */ }
-        console.error(driftNote + hangAdvice(gate, result, used.silenceSec));
-        process.exit(0);
-      }
-      failures += attributed
-        ? `\n${attributionLines(attributed)}`
-        : `\n--- ristretto gate '${gate.label}' FAILED ---\n${result.output.split('\n').slice(-40).join('\n')}`;
+    if (r.stalled) {
+      console.error(driftNote + r.failures);
+      process.exit(0);
     }
 
-    if (!failures) {
+    if (r.ok) {
       if (driftNote) console.error(driftNote.trim());
-      if (unscopedTestMs >= SLOW_TEST_HINT_MS) {
-        console.error(`ristretto: the full test suite took ${Math.round(unscopedTestMs / 1000)}s, and it will run again at every stop — no "gates"."testChanged" is configured.`);
+      if (r.unscopedTestMs >= SLOW_TEST_HINT_MS) {
+        console.error(`ristretto: the full test suite took ${Math.round(r.unscopedTestMs / 1000)}s, and it will run again at every stop — no "gates"."testChanged" is configured.`);
         console.error('  Scope the loop to what each feature touches; the whole repo is still proven by `gate.js verify` at the end.');
         console.error('  One runner:  "testChanged": "<related-tests command> {files}"');
         console.error('  Several:     "testChanged": [{ "match": ["backend/**/*.py"], "cmd": "..." }, { "match": ["frontend/**"], "cmd": "..." }]');
       }
-      for (const s of slowScoped) {
+      for (const s of r.slowScoped) {
         console.error(`ristretto: the scoped gate '${s.label}' took ${s.secs}s — that is the fast path, so something is wrong with it.`);
         console.error('  Most often it dropped the parallelism the full "test" gate has: compare the two commands in .ristretto.json');
         console.error('  and give the scoped one the same flags (-n auto, --parallel, -T, ...). A scoped run that is slower than the');
         console.error('  whole suite is worse than no scoping at all. Otherwise the route is matching more than the feature touched.');
       }
       try { fs.unlinkSync(retriesPath); } catch { /* never existed */ }
-      // Nothing is hung any more. A marker left from an older run keeps saying one is, with no
-      // expiry and nothing to contradict it — state that lies is worse than state that is missing.
-      try { fs.unlinkSync(stalledPath); } catch { /* never existed */ }
-      reportRunCost(Date.now() - passStartedAt);
-      // Recompute — the gate commands themselves may have written artifacts.
-      const green = treeFingerprint();
-      if (green !== null) {
-        try { fs.writeFileSync(greenPath, green); } catch { /* cache is best-effort */ }
-      }
       process.exit(0);
     }
 
@@ -1486,11 +1475,11 @@ async function main() {
     try { retries = parseInt(fs.readFileSync(retriesPath, 'utf8'), 10) || 0; } catch { /* first failure */ }
     if (retries >= MAX_RETRIES) {
       try { fs.unlinkSync(retriesPath); } catch { /* ignore */ }
-      console.error(`${driftNote}ristretto: gates still failing after ${MAX_RETRIES} forced retries — surfacing to user instead of looping.${failures}`);
+      console.error(`${driftNote}ristretto: gates still failing after ${MAX_RETRIES} forced retries — surfacing to user instead of looping.${r.failures}`);
       process.exit(0);
     }
     fs.writeFileSync(retriesPath, String(retries + 1));
-    console.error(`${driftNote}ristretto: work is not done — deterministic gates failed. Fix these before stopping. Do NOT weaken, skip, or delete gates/tests to get green.${failures}`);
+    console.error(`${driftNote}ristretto: work is not done — deterministic gates failed. Fix these before stopping. Do NOT weaken, skip, or delete gates/tests to get green.${r.failures}`);
     process.exit(2);
   }
 
