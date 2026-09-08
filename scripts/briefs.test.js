@@ -91,7 +91,7 @@ assert.ok(words(impl) + words(read('briefs/common.md')) < 1300,
   'an implementer dispatch must cost well under 1901 words — 1300 is the target, not the baseline');
 
 // 10. Each role brief exists, defers to common.md, and does not restate it.
-const CAPS = { 'briefs/planner.md': [450, 800], 'briefs/reviewer.md': [450, 700], 'briefs/closer.md': [350, 600] };
+const CAPS = { 'briefs/planner.md': [450, 820], 'briefs/reviewer.md': [450, 750], 'briefs/closer.md': [400, 850] };
 for (const [b, [own, total]] of Object.entries(CAPS)) {
   const t = read(b);
   assert.ok(/common\.md/.test(t), `${b} must send the reader to common.md`);

@@ -9,7 +9,7 @@ Read the repo's `CLAUDE.md` / `AGENTS.md`, including any nested one near the fil
 ## Manual checks — the reach test
 
 - **The reach test**: a manual check exists only where this repo gives you no path to a criterion's subject — not merely because the subject is a database, a screen, or an external service. Look for a path first: a compose file, a seed script, a driver already in the dev dependencies.
-- **Never a check about production** — rollout, backfill, key rotation, flag enablement: not yours, not the user's, not on the list.
+- **Never a check about production** — not yours, not the user's, not on the list.
 - **Never tick a box yourself** — that's the user's signature the step really happened.
 
 ## Tests
