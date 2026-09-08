@@ -138,4 +138,11 @@ assert.ok(/gate\.js" state/.test(pull), 'pull must run the state pre-flight');
 assert.ok(!/\.ristretto\/gate-retries/.test(pull), 'pull must not know gate.js state filenames any more');
 assert.ok(!/`easy`\s*→|Tier.*easy.*→/.test(pull), 'pull is the normal path — no tier branch');
 
+// 16. shot is the easy path against an existing plan — it no longer writes one.
+const shot = read('commands/shot.md');
+assert.ok(words(shot) < 700, `shot.md is ${words(shot)} words`);
+assert.ok(/implementer\.md/.test(shot), 'shot must read the implementer brief');
+assert.ok(!/Add a `planned` row|in prep's format/.test(shot), 'shot no longer writes plans — prep always runs first');
+assert.ok(/prep/.test(shot), 'shot must say prep runs first');
+
 console.log('briefs.test.js: all checks passed');
