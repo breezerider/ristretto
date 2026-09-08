@@ -1462,4 +1462,75 @@ dir = tmpRepo();
 r = gate(dir, 'prove');
 assert.strictEqual(r.status, 0, 'prove with no config must exit 0 — nothing is set up to prove');
 
+// --- Fix round 1: findings from review of the runGates extraction. ---
+
+// 138. skipIfProven: once the lock is ours, `prove` rechecks the fingerprint against gate-green
+//      before running anything — under brew this is the ORDINARY case, a reviewer/closer stacked
+//      behind a sibling run on an unchanged tree. `verify` deliberately never takes this path
+//      (see check 37): a direct `verify` always re-runs for real, cache or not.
+//      A genuine "the holder proves it while we queue for the lock" race needs a second live
+//      process to reproduce, and this file's `gate()` fixture is synchronous — it cannot hold a
+//      contended lock open while writing gate-green from the same test. So this proves the option
+//      itself on the case `prove` always takes when it starts on an already-proven tree: unlike
+//      `full`, `prove` has no pre-lock fingerprint check of its own, so the ONLY thing that can
+//      skip the gate here is the check inside runGates.
+dir = gitTmpRepo(JSON.stringify({ gates: { test: COUNT } }));
+arm(dir);
+assert.strictEqual(gate(dir, 'full').status, 0, 'the first full run must execute and prove the tree');
+assert.strictEqual(runs(dir), 1, 'the first full run must have run the gate once');
+r = gate(dir, 'prove');
+assert.strictEqual(r.status, 0, 'prove on an already-proven tree must exit 0');
+assert.strictEqual(runs(dir), 1, 'prove must NOT re-run the gate once the tree is already proven');
+
+// 139. And `verify` — off by design — still re-runs on that same already-proven tree, matching
+//      check 37's "a plain verify always re-runs" guarantee.
+r = gate(dir, 'verify');
+assert.strictEqual(r.status, 0);
+assert.strictEqual(runs(dir), 2, 'a direct verify must re-run even though the tree is already proven green');
+
+// 140. recordQuiet fires on the gate command's own clean exit, in every mode — even when
+//      attribution then blocks the run. The silence budget measures the TOOL's behaviour, not
+//      the verdict it produced: gating this on the verdict left every report-attributed gate
+//      permanently uncalibrated as long as the repo carried so much as one tolerated failure,
+//      which is the common case, not the rare one. (Old `verify` recorded unconditionally on
+//      `result === null`; the extraction had narrowed that to only a fully passing gate.)
+dir = tmpRepo(JSON.stringify({ gates: { test: 'node writer.js', testReport: '.ristretto/report.xml' } }));
+fs.writeFileSync(path.join(dir, 'writer.js'), `
+const fs = require('fs');
+fs.mkdirSync('.ristretto', { recursive: true });
+fs.writeFileSync('.ristretto/report.xml',
+  '<testsuites><testsuite><testcase classname="a" name="1"><failure message="x">boom</failure></testcase></testsuite></testsuites>');
+process.exit(0);
+`);
+arm(dir);
+setBaseline(dir, []); // no pre-existing failures, so a::1 reads as NEW and blocks
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 2, 'a NEW failure in the report must block even though the command itself exited 0');
+const quietAfterBlock = JSON.parse(fs.readFileSync(path.join(dir, '.ristretto', 'gate-quiet.json'), 'utf8'));
+assert.ok(Number.isFinite(quietAfterBlock.test),
+  'recordQuiet must fire on a clean process exit even when attribution then blocks the run');
+
+// 141. A blocking gate's attribution lines are printed exactly once — via the failures text, not
+//      also eagerly. `runGates` printed unconditionally whenever there were new or tolerated
+//      failures, and then again through `failures`, so a NEW failure showed up twice in stderr.
+//      (Old `full` had exactly this duplicate before the extraction too; removing it there was
+//      intended, not a new regression.) A PASS that tolerates something still prints its line
+//      once, eagerly — nothing else would ever surface it.
+dir = reporterRepo(['a::1', 'a::2'], ['a::1', 'a::2']);
+arm(dir);
+setBaseline(dir, ['a::1']);
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 2, 'a new failure still blocks');
+const headerCount = (r.stderr.match(/NEW test failure/g) || []).length;
+assert.strictEqual(headerCount, 1,
+  'the NEW-failure attribution must be printed exactly once, not eagerly and again via the failures text');
+
+// 142. `prove` on a broken/unparseable config is UNVERIFIED (3), never the generic exit 0 an
+//      implementer running `prove` as its final proof would otherwise read as green.
+dir = tmpRepo('{not json');
+r = gate(dir, 'prove');
+assert.strictEqual(r.status, 3, 'a broken config must leave prove UNVERIFIED (3), not green (0) or red (1)');
+assert.ok(r.stderr.includes('.ristretto.json'), 'the error must name the config file — got: ' + r.stderr.slice(0, 200));
+assert.ok(!fs.existsSync(path.join(dir, '.ristretto', 'gate-green')), 'a broken config must not let prove write a fingerprint');
+
 console.log('gate.test.js: all checks passed');

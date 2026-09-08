@@ -21,7 +21,8 @@
 //                    SubagentStop hook would: the SCOPED test gate, same lock, same budgets. On
 //                    green it writes the fingerprint, so the hook that follows finds a proven
 //                    tree and does nothing — one run instead of two. Exits 0 green, 1 red, 3
-//                    UNVERIFIED (a stall or an unobtained lock), never the hook's 2.
+//                    UNVERIFIED (a stall, an unobtained lock, or an unparseable config), never the
+//                    hook's 2.
 //
 // ORCHESTRATOR. brew's main agent writes no source by design; it dispatches subagents, which are
 // gated individually on SubagentStop. Gating its OWN stops means running a suite against a tree a
@@ -293,6 +294,13 @@ try {
   if (MODE === 'verify') {
     console.error(`ristretto: .ristretto.json is unparseable (${e.message}) — fix it, the gate cannot run.`);
     process.exit(1);
+  }
+  if (MODE === 'prove') {
+    // Never the generic exit 0 below: an implementer running `prove` as its final proof would
+    // read exit 0 as green. This proved nothing either way, same as a stall or an unobtained
+    // lock — exit 3, not 0 (falsely green) and not verify's 1 (this never ran a gate to fail).
+    console.error(`ristretto: .ristretto.json is unparseable (${e.message}) — fix it, the gate cannot run.`);
+    process.exit(3);
   }
   if (MODE === 'full' && fs.existsSync(markerPath)) {
     // Fail closed: a broken config while a pull is active must not silently disarm the gate.
@@ -1082,13 +1090,28 @@ function hangAdvice(gate, result, usedSec) {
 //                       which owes a full report of everything it found).
 //   mayCreateBaseline    only a caller that deliberately chose to run (`verify`) may capture a
 //                       first-ever baseline; every other caller only ever updates one that exists.
+//   skipIfProven        after the lock is ours, recheck the fingerprint against gate-green before
+//                       running anything — the holder may have just proven exactly the tree we
+//                       queued to test. Under brew this is the ORDINARY case: a reviewer/closer
+//                       stacks behind a sibling run on an unchanged tree. On for the hook and
+//                       `prove`; off for `verify`, which is a deliberate request to re-run for
+//                       real and must not be answered from a cache it never asked for.
 //
-// Returns `ok: true` on a clean pass (the fingerprint has been written), `false` on a real
-// failure or a stopped stall (see `stalled`), or `null` when the lock itself was never obtained —
-// nothing ran at all. `failures` is the text a caller prints; `results` is the per-gate ✓/✗
-// summary `verify` shows.
-async function runGates({ scoped, stopOnStall, mayCreateBaseline, label }) {
+// Returns `ok: true` on a clean pass (the fingerprint has been written, or was already there —
+// see `alreadyProven`), `false` on a real failure or a stopped stall (see `stalled`), or `null`
+// when the lock itself was never obtained — nothing ran at all. `failures` is the text a caller
+// prints; `results` is the per-gate ✓/✗ summary `verify` shows.
+async function runGates({ scoped, stopOnStall, mayCreateBaseline, skipIfProven, label }) {
   if (!(await acquireLock(label))) return { ok: null, stalled: false, results: [], failures: '' };
+
+  if (skipIfProven) {
+    const fp = treeFingerprint();
+    let lastGreen = null;
+    try { lastGreen = fs.readFileSync(greenPath, 'utf8'); } catch { /* nothing proven yet */ }
+    if (fp !== null && fp === lastGreen) {
+      return { ok: true, stalled: false, results: [], failures: '', unscopedTestMs: 0, slowScoped: [], alreadyProven: true };
+    }
+  }
 
   const passStartedAt = Date.now();
   const results = [];
@@ -1104,6 +1127,12 @@ async function runGates({ scoped, stopOnStall, mayCreateBaseline, label }) {
       try { fs.unlinkSync(path.join(projectDir, rel)); } catch { /* nothing to clear */ }
     }
     const result = await run(gate.cmd, used);
+    // Green: whatever silence this gate showed was healthy silence. That is the calibration —
+    // fired on the command's own exit, in every mode, whatever attribution later decides. The
+    // silence budget measures the TOOL's behaviour, not the verdict; gating this on the verdict
+    // left every report-attributed gate uncalibrated as long as the repo carried a tolerated
+    // failure, which is the ordinary case, not the rare one.
+    if (result === null) recordQuiet(gate.key, lastRunMaxQuietMs);
 
     // Attribution runs whether or not the command exited 0 — a report is how a previously-failing
     // test LEAVES the tolerated set, and skipping this on a green exit would make the ratchet able
@@ -1126,7 +1155,10 @@ async function runGates({ scoped, stopOnStall, mayCreateBaseline, label }) {
     if (attributedPass && loadBaseline(baselinePath) !== null) {
       saveBaseline(baselinePath, attributed.next, git('rev-parse HEAD'));
     }
-    if (attributed && (attributed.newFailures.length || attributed.tolerated.length)) {
+    // Printed here only for a PASS that is tolerating something — informational, since nothing
+    // else ever shows it. A BLOCKING gate's lines go out exactly once, via the failures text
+    // below; printing them here too would say the same failure twice.
+    if (attributedPass && attributed.tolerated.length) {
       console.error(attributionLines(attributed));
     }
 
@@ -1134,8 +1166,6 @@ async function runGates({ scoped, stopOnStall, mayCreateBaseline, label }) {
     // is a suite that was already red for reasons this change did not cause, and a zero exit with
     // new failures in the report still blocks.
     if (attributed ? attributedPass : result === null) {
-      // Green: whatever silence this gate showed was healthy silence. That is the calibration.
-      if (result === null) recordQuiet(gate.key, lastRunMaxQuietMs);
       // A full suite ran because nothing scoped it. Remember how long that cost.
       if (result === null && gate.key === 'test' && !gates.testChanged) unscopedTestMs = Date.now() - gateStartedAt;
       // And the mirror of it: a scoped gate is the fast path by definition, so one that runs this
@@ -1426,15 +1456,10 @@ async function main() {
     try { lastGreen = fs.readFileSync(greenPath, 'utf8'); } catch { /* no green run yet */ }
     if (fp !== null && fp === lastGreen) process.exit(0);
 
-    // Did the pre-flight prove a green tree with a different toolchain than this hook runs?
-    const drift = toolDrift(resolveGateTools());
-    const driftNote = drift.length ? `\n${drift.join('\n')}\n` : '';
-
-    // Serialise. A gate that runs alongside another one measures both. (The lock-wait itself, and
-    // whether the holder may have already proven exactly this tree, both live inside runGates now
-    // — a small redundant run on the rare tree-matched-mid-wait race is the price, and it is only
-    // ever a wasted run, never a wrong verdict.)
-    const r = await runGates({ scoped: true, stopOnStall: true, mayCreateBaseline: false, label: IS_SUBAGENT ? 'subagent stop' : 'stop' });
+    // Serialise. A gate that runs alongside another one measures both. `skipIfProven` covers the
+    // rare tree-matched-mid-wait race: the holder may have proven exactly this tree while we
+    // queued for the lock, which under brew is the ORDINARY case, not the rare one.
+    const r = await runGates({ scoped: true, stopOnStall: true, mayCreateBaseline: false, skipIfProven: true, label: IS_SUBAGENT ? 'subagent stop' : 'stop' });
 
     if (r.ok === null) {
       // BLOCK, don't wave through. Unlike a hang, a lock conflict is transient and clears on its
@@ -1452,6 +1477,17 @@ async function main() {
       console.error('  Wait for that run to finish and run the gates again. Do not start a second suite yourself.');
       process.exit(2);
     }
+
+    // The holder proved exactly the tree we came to test while we waited for the lock — same as
+    // the pre-lock check above, just on the far side of a wait that could have taken a while.
+    if (r.alreadyProven) process.exit(0);
+
+    // Did the pre-flight prove a green tree with a different toolchain than this hook runs? Only
+    // worth asking once we know the gates are actually about to run — computing it any earlier
+    // paid for a toolchain resolution on paths (a contended lock, an already-proven tree) that
+    // never use it at all.
+    const drift = toolDrift(resolveGateTools());
+    const driftNote = drift.length ? `\n${drift.join('\n')}\n` : '';
 
     if (r.stalled) {
       console.error(driftNote + r.failures);
@@ -1499,7 +1535,10 @@ async function main() {
   // "fix this" (1) or "ship it" (0). No fingerprint is written on 1 or 3, and the retry budget —
   // scoped to the hook's own loop — is never touched here.
   if (MODE === 'prove') {
-    const r = await runGates({ scoped: true, stopOnStall: true, mayCreateBaseline: false, label: 'prove' });
+    // skipIfProven: another run may have proven this exact tree while we queued for the lock —
+    // or, on an unchanged tree with an uncontended lock, may have proven it before prove ever
+    // started. Either way there is nothing left to run.
+    const r = await runGates({ scoped: true, stopOnStall: true, mayCreateBaseline: false, skipIfProven: true, label: 'prove' });
     if (r.ok === null) {
       console.error(`ristretto: could not start — ${lockHolder()} still holds the gate lock after ${waitSec}s.`);
       console.error('  The tree is UNVERIFIED, not red. Let that run finish, then prove again.');
