@@ -1397,4 +1397,69 @@ assert.strictEqual(r.status, 1, 'arm must exit 1 when it cannot write the marker
 assert.ok(r.stderr.includes('could not arm') && r.stderr.includes(path.join(dir, '.ristretto', 'pulling')),
   'arm must name the unwritable path — got: ' + r.stderr);
 
+// --- `prove`: one gate run instead of two. ---
+// The agent's own final proof, run inside its own turn instead of paid for again in the silence
+// after it. Same lock, same scoped gate list, same budgets as the SubagentStop hook — so a hook
+// that follows finds the tree already proven and does nothing.
+
+// 131. `prove` runs the gates, exits 0 green, and writes the fingerprint so the hook is free.
+dir = gitTmpRepo(JSON.stringify({ gates: { lint: PASS, test: PASS } }));
+arm(dir);
+r = gate(dir, 'prove');
+assert.strictEqual(r.status, 0, 'prove must exit 0 when the gates pass');
+assert.ok(fs.existsSync(path.join(dir, '.ristretto', 'gate-green')), 'prove must write the fingerprint');
+
+// 132. And the SubagentStop hook that follows must find it proven and do nothing.
+const provenAt = fs.statSync(path.join(dir, '.ristretto', 'gate-green')).mtimeMs;
+r = gate(dir, 'full', JSON.stringify({ session_id: '' }), {}, 'subagent');
+assert.strictEqual(r.status, 0, 'the hook after prove must exit 0');
+assert.strictEqual(fs.statSync(path.join(dir, '.ristretto', 'gate-green')).mtimeMs, provenAt,
+  'the hook must skip entirely, not re-run and rewrite the fingerprint');
+
+// 133. `prove` reports red with exit 1 — never 2. It informs its caller; it does not block a stop.
+//      And it never touches the retry budget: that belongs to the hook, not to a one-shot proof.
+dir = tmpRepo(JSON.stringify({ gates: { lint: FAIL } }));
+arm(dir);
+r = gate(dir, 'prove');
+assert.strictEqual(r.status, 1, 'prove must exit 1 on a red gate, never 2');
+assert.ok(!fs.existsSync(path.join(dir, '.ristretto', 'gate-green')), 'a red prove must not write a fingerprint');
+assert.ok(!fs.existsSync(path.join(dir, '.ristretto', 'gate-retries')), 'prove must never touch the retry budget');
+
+// 134. `prove` uses the SCOPED test gate, like the hook does — not the full suite like `verify`.
+//      A brew that paid for a repo-wide run per feature is the cost this whole design avoids.
+dir = gitTmpRepo(JSON.stringify({ gates: { test: FULL, testChanged: SCOPED } }));
+arm(dir);
+fs.writeFileSync(path.join(dir, 'src.txt'), 'touched');
+r = gate(dir, 'prove');
+assert.strictEqual(r.status, 0, 'prove must exit 0 when the scoped gate passes');
+assert.strictEqual(trace(dir), 's', 'prove must run the scoped gate, not the full test gate');
+
+// 135. A stalled gate makes `prove` UNVERIFIED — exit 3, never 0 (which would claim a proof it
+//      never made) and never 1 (which would send the caller hunting a defect that may not exist).
+//      It prints the same hang advice the hook prints, and writes no fingerprint.
+dir = tmpRepo(JSON.stringify({ gates: { test: STALL }, silence: { test: 1 } }));
+arm(dir);
+r = gate(dir, 'prove');
+assert.strictEqual(r.status, 3, 'a stalled prove must exit 3 — not 0 and not 1');
+assert.ok(r.stderr.includes('printed nothing for 1s'), 'prove must print the same hang advice the hook prints');
+assert.ok(!fs.existsSync(path.join(dir, '.ristretto', 'gate-green')), 'a stalled prove must write no fingerprint');
+assert.ok(!fs.existsSync(path.join(dir, '.ristretto', 'gate-retries')), 'a stalled prove must never touch the retry budget');
+
+// 136. A lock `prove` cannot obtain is the other UNVERIFIED case — a collision must not look like
+//      a defect, and must not claim a proof that never ran.
+dir = tmpRepo(JSON.stringify({ gates: { test: PASS }, lockWait: 1 }));
+fs.mkdirSync(path.join(dir, '.ristretto'), { recursive: true });
+fs.writeFileSync(path.join(dir, '.ristretto', 'gate-lock'),
+  JSON.stringify({ pid: process.pid, label: 'a full suite', at: Date.now() }));
+r = gate(dir, 'prove');
+assert.strictEqual(r.status, 3, 'a prove that cannot get the lock must exit 3, not 0 and not 1');
+assert.ok(!fs.existsSync(path.join(dir, '.ristretto', 'gate-green')), 'an unlocked prove must write no fingerprint');
+assert.ok(!fs.existsSync(path.join(dir, '.ristretto', 'gate-retries')), 'an unlocked prove must never touch the retry budget');
+
+// 137. `prove` in a repo with no ristretto config has nothing to prove — say so and exit 0, same
+//      as every other command that finds ristretto not set up here.
+dir = tmpRepo();
+r = gate(dir, 'prove');
+assert.strictEqual(r.status, 0, 'prove with no config must exit 0 — nothing is set up to prove');
+
 console.log('gate.test.js: all checks passed');

@@ -17,6 +17,11 @@
 //                    verdict instead of re-running. For a pre-flight repeated after a session
 //                    restart: re-paying a ten-minute suite to re-prove an unchanged tree is
 //                    waste, and waste at the worst moment — before anything has been built.
+//   prove            Not a hook — run directly (`node gate.js prove`). Runs exactly what the
+//                    SubagentStop hook would: the SCOPED test gate, same lock, same budgets. On
+//                    green it writes the fingerprint, so the hook that follows finds a proven
+//                    tree and does nothing — one run instead of two. Exits 0 green, 1 red, 3
+//                    UNVERIFIED (a stall or an unobtained lock), never the hook's 2.
 //
 // ORCHESTRATOR. brew's main agent writes no source by design; it dispatches subagents, which are
 // gated individually on SubagentStop. Gating its OWN stops means running a suite against a tree a
@@ -1481,6 +1486,34 @@ async function main() {
     fs.writeFileSync(retriesPath, String(retries + 1));
     console.error(`${driftNote}ristretto: work is not done — deterministic gates failed. Fix these before stopping. Do NOT weaken, skip, or delete gates/tests to get green.${r.failures}`);
     process.exit(2);
+  }
+
+  // The agent's own final proof. Runs exactly what the SubagentStop hook would run — the scoped
+  // test gate, the same lock, the same budgets — and writes the fingerprint, so the hook that
+  // follows finds a proven tree and exits immediately. One run instead of two, and it happens
+  // inside the agent's own turn rather than in the silence after it.
+  //
+  // Three exit codes, and never the hook's 2: this reports to its caller, it does not block a
+  // stop. 0 is green. 1 is a real red — the caller acted, the tree is broken. 3 is neither: a
+  // stalled gate or a lock never obtained proved nothing either way, and must not be read as
+  // "fix this" (1) or "ship it" (0). No fingerprint is written on 1 or 3, and the retry budget —
+  // scoped to the hook's own loop — is never touched here.
+  if (MODE === 'prove') {
+    const r = await runGates({ scoped: true, stopOnStall: true, mayCreateBaseline: false, label: 'prove' });
+    if (r.ok === null) {
+      console.error(`ristretto: could not start — ${lockHolder()} still holds the gate lock after ${waitSec}s.`);
+      console.error('  The tree is UNVERIFIED, not red. Let that run finish, then prove again.');
+      process.exit(3);
+    }
+    if (r.stalled) {
+      console.error(r.failures);
+      process.exit(3);
+    }
+    if (r.failures) {
+      console.error(r.failures);
+      process.exit(1);
+    }
+    process.exit(0);
   }
 
   process.exit(0);
