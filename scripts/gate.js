@@ -125,6 +125,16 @@ function ownerLabel(p) {
   return owner === mySession() ? 'this session' : 'ANOTHER session';
 }
 
+// Raw seconds stop being legible well before an hour ("21642s ago") — render in the largest
+// unit that still reads as a sentence: seconds under a minute, then minutes, then hours.
+function formatAge(ms) {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s ago`;
+  const min = Math.round(ms / 60000);
+  if (min < 60) return `${min}min ago`;
+  return `${Math.round(ms / 3600000)}h ago`;
+}
+
 // Seconds a gate may produce NO output before it's treated as hung.
 // lint and typecheck get a long rope on purpose: whole-project analysers print nothing at all
 // until they finish — a type checker, a linter over the whole tree, a compile step — so their
@@ -280,7 +290,10 @@ try {
     console.error(`ristretto: .ristretto.json is unparseable (${e.message}) — fix it, the gate cannot run.`);
     process.exit(2);
   }
-  process.exit(0);
+  // Same reasoning as the exists-check above: `state` answers questions about a repo that may
+  // not be set up (or may have a broken config) rather than going silent. The defaults already
+  // assigned above (`gates = {}` etc.) are enough — the `state` branch never reads them.
+  if (MODE !== 'state') process.exit(0);
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1089,8 +1102,11 @@ async function main() {
       const who = ownerLabel(p);
       if (who === null) { console.log(`${label}: not armed`); continue; }
       const idle = markerIdleMs(p);
-      const age = idle === null ? 'unknown' : `${Math.round(idle / 1000)}s ago`;
-      console.log(`${label}: armed by ${who}, last activity ${age}`);
+      const age = idle === null ? 'unknown' : formatAge(idle);
+      // "armed by unclaimed" reads as a typo, not a state — an unclaimed marker gets its own
+      // clause instead of being forced through the "armed by <owner>" template.
+      const status = who === 'unclaimed' ? 'armed, unclaimed' : `armed by ${who}`;
+      console.log(`${label}: ${status}, last activity ${age}`);
     }
 
     const paths = dirtyPaths();
@@ -1116,10 +1132,14 @@ async function main() {
     // scratch scripts there that nothing here ever reads. A pre-flight that only names build/
     // makes those invisible; everything gate.js doesn't own gets named instead, so a stale
     // directory reads as the fifty-odd files it actually is rather than as tidy.
+    // Derived from the same path constants gate.js writes through, not retyped — a renamed
+    // file stays known automatically instead of silently drifting from this list. `build` has
+    // no constant naming it (no single file owns that directory), so it stays a literal.
     const known = new Set([
-      'pulling', 'orchestrating', 'gate-retries', 'gate-green', 'gate-stalled',
-      'gate-tools.json', 'gate-lock', 'gate-quiet.json', 'format-broken', 'baseline.json', 'build',
-    ]);
+      markerPath, orchestratingPath, retriesPath, greenPath, stalledPath,
+      toolsPath, lockPath, quietPath, formatBrokenPath, baselinePath,
+    ].map((p) => path.basename(p)));
+    known.add('build');
     for (const rel of allReportPaths()) known.add(path.basename(rel));
     let entries = [];
     try { entries = fs.readdirSync(path.join(projectDir, '.ristretto')); } catch { /* not armed yet */ }

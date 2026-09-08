@@ -1276,4 +1276,26 @@ assert.ok(/unrecognised/.test(r.stdout), 'state must call out files it does not 
 assert.ok(r.stdout.includes('scratch.log'), 'the unrecognised file must be named — got: ' + r.stdout);
 assert.ok(!r.stdout.includes('gate-green'), 'a file gate.js owns must not be reported as unrecognised — got: ' + r.stdout);
 
+// 115. `state` must run even when `.ristretto.json` is absent — the global constraint from the
+//      brief. The second config-read (the try/catch around JSON.parse) must not fall through to
+//      exit(0) before `state` gets to print anything.
+dir = tmpRepo(); // tmpRepo() with no argument writes no .ristretto.json at all
+r = gate(dir, 'state');
+assert.strictEqual(r.status, 0, 'state without a config file must exit 0');
+assert.ok(/pulling: not armed/.test(r.stdout),
+  'state without a config file must still report — got stdout: ' + JSON.stringify(r.stdout) + ' stderr: ' + JSON.stringify(r.stderr));
+
+// 116. An unclaimed marker (armed, but no session has touched it yet) reads as a sentence, not
+//      as "armed by unclaimed" — and idle time is rendered in the largest sensible unit rather
+//      than raw seconds.
+dir = tmpRepo(JSON.stringify({ gates: { test: PASS } }));
+arm(dir); // writes an empty marker — unclaimed
+const oldMtime = new Date(Date.now() - 6 * 60 * 60 * 1000); // 6h ago
+fs.utimesSync(path.join(dir, '.ristretto', 'pulling'), oldMtime, oldMtime);
+r = gate(dir, 'state');
+assert.ok(/pulling: armed, unclaimed/.test(r.stdout), 'unclaimed marker must read as a sentence — got: ' + r.stdout);
+assert.ok(!/armed by unclaimed/.test(r.stdout), '"armed by unclaimed" is not a sentence — got: ' + r.stdout);
+assert.ok(/\b6h ago\b/.test(r.stdout), 'a 6-hour-old marker must render in hours, not raw seconds — got: ' + r.stdout);
+assert.ok(!/21600s ago/.test(r.stdout), 'idle time must not be printed as raw seconds once it is this large — got: ' + r.stdout);
+
 console.log('gate.test.js: all checks passed');
