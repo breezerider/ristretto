@@ -129,4 +129,13 @@ for (const f of [...COMMANDS, ...BRIEFS]) {
   }
 }
 
+// 15. pull is a flow: it hands out paths, arms through gate.js, and carries no tier branch.
+const pull = read('commands/pull.md');
+assert.ok(words(pull) < 1400, `pull.md is ${words(pull)} words — was 8961`);
+assert.ok(/implementer\.md/.test(pull), 'pull must read the implementer brief, not restate it');
+assert.ok(/gate\.js" arm/.test(pull) && /gate\.js" disarm/.test(pull), 'pull must arm and disarm through gate.js');
+assert.ok(/gate\.js" state/.test(pull), 'pull must run the state pre-flight');
+assert.ok(!/\.ristretto\/gate-retries/.test(pull), 'pull must not know gate.js state filenames any more');
+assert.ok(!/`easy`\s*→|Tier.*easy.*→/.test(pull), 'pull is the normal path — no tier branch');
+
 console.log('briefs.test.js: all checks passed');
