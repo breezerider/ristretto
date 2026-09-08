@@ -1387,4 +1387,14 @@ assert.strictEqual(r.status, 0, 'a foreign session must not be guarded by someon
 r = gate(dir, 'guard', JSON.stringify({ tool_input: { file_path: 'CLAUDE.md' }, session_id: 'sess-owner' }));
 assert.strictEqual(r.status, 2, 'the owning session must still be guarded from writing house rules');
 
+// 130. `arm` fails loudly, not silently, when it cannot write the marker — a swallowed error here
+//      would leave a run believing it is armed while the gates are off. Make `pulling` a directory
+//      so `writeFileSync` fails the same way (EISDIR) on every platform.
+dir = tmpRepo(JSON.stringify({ gates: { test: PASS } }));
+fs.mkdirSync(path.join(dir, '.ristretto', 'pulling'), { recursive: true });
+r = gate(dir, 'arm', '{}', { CLAUDE_CODE_SESSION_ID: 'sess-aaa' });
+assert.strictEqual(r.status, 1, 'arm must exit 1 when it cannot write the marker');
+assert.ok(r.stderr.includes('could not arm') && r.stderr.includes(path.join(dir, '.ristretto', 'pulling')),
+  'arm must name the unwritable path — got: ' + r.stderr);
+
 console.log('gate.test.js: all checks passed');

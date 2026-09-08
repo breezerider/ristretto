@@ -1172,7 +1172,6 @@ async function main() {
   // at all, with no error and no symptom.
   if (MODE === 'arm') {
     const me = mySession();
-    fs.mkdirSync(path.join(projectDir, '.ristretto', 'build'), { recursive: true });
     const prior = markerOwner(markerPath);
     if (prior !== null && prior !== '' && prior !== me) {
       const idle = markerIdleMs(markerPath);
@@ -1180,8 +1179,18 @@ async function main() {
       console.error(`ristretto: .ristretto/pulling belongs to another session (idle ${age}) — taking it over.`);
       console.error('  If a run really is live in another window, stop it: two runs share one branch and one gate lock.');
     }
-    fs.writeFileSync(markerPath, me);
-    if (ARG === 'orchestrator') fs.writeFileSync(orchestratingPath, me);
+    // These writes are deliberately NOT best-effort: an `arm` that swallows the error, prints
+    // nothing, and exits 0 without having written the marker would leave a run believing it is
+    // armed while the gates are off — the exact silent failure this task exists to remove. So a
+    // write failure here is loud (one line naming the path and why) and exits 1 instead.
+    try {
+      fs.mkdirSync(path.join(projectDir, '.ristretto', 'build'), { recursive: true });
+      fs.writeFileSync(markerPath, me);
+      if (ARG === 'orchestrator') fs.writeFileSync(orchestratingPath, me);
+    } catch (e) {
+      console.error(`ristretto: could not arm — cannot write ${e.path || markerPath}: ${e.message}`);
+      process.exit(1);
+    }
     process.exit(0);
   }
 
