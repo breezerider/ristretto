@@ -1564,4 +1564,18 @@ fs.writeFileSync(path.join(dir, 'frontend.txt'), 'untracked, and matches no rout
 r = gate(dir, 'verify');
 assert.ok(/route|uncovered|falls back/i.test(r.stderr), 'route gaps must be reported at pre-flight — got: ' + r.stderr.slice(0, 400));
 
+// 147. The three static checks (formatPaths, silencing flags, route gaps) are pre-flight advice,
+//      not hook noise — the amendment the controller's ruling restored after the "one shared
+//      audit" merge made them fire on every green subagent stop too. A green `full` stop must stay
+//      silent about a missing formatPaths; `verify` on the same config still names it.
+dir = tmpRepo(JSON.stringify({ gates: { format: PASS, test: PASS } }));
+arm(dir);
+r = gate(dir, 'full');
+assert.strictEqual(r.status, 0, 'green gates while armed must exit 0');
+assert.ok(!/formatPaths/.test(r.stderr),
+  'the hook must not repeat the formatPaths advice on every green stop — got: ' + r.stderr.slice(0, 300));
+
+r = gate(dir, 'verify');
+assert.ok(/formatPaths/.test(r.stderr), 'verify must still name the missing formatPaths — got: ' + r.stderr.slice(0, 300));
+
 console.log('gate.test.js: all checks passed');
