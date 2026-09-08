@@ -91,6 +91,9 @@ const LOCK_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 // pull. Every armed run touches the marker, so this measures IDLENESS, not age — an unattended
 // batch that runs for three days keeps its own gates armed the whole time, while a marker left
 // behind by a crashed session ages out instead of arming a session that never asked for it.
+// This now only ever advances on the OWNER's runs — a foreign session never refreshes someone
+// else's marker — so a run whose subagents all die still disarms itself after a day, instead of
+// being kept alive forever by gate hooks from sessions that were never part of it.
 const MARKER_MAX_IDLE_MS = 24 * 60 * 60 * 1000;
 
 // The orchestrator's exemption gets a far shorter rope than the pulling marker, because the two
@@ -252,11 +255,12 @@ const HOUSE_RULE_FILES = new Set(['claude.md', 'agents.md']);
 
 // No config → ristretto not set up in this repo → never interfere.
 // `state` answers questions about a repo that may not be set up yet — that is a legitimate
-// answer, not a reason to say nothing.
-if (!fs.existsSync(configPath) && MODE !== 'state') process.exit(0);
+// answer, not a reason to say nothing. `arm`/`disarm` are commands, not hooks, and need only
+// `.ristretto/` to exist — a first `arm` in a repo that has not run `prep` yet must still work.
+if (!fs.existsSync(configPath) && MODE !== 'state' && MODE !== 'arm' && MODE !== 'disarm') process.exit(0);
 
 let hook = {};
-if (MODE !== 'verify' && MODE !== 'state') {
+if (MODE !== 'verify' && MODE !== 'state' && MODE !== 'arm' && MODE !== 'disarm') {
   try { hook = JSON.parse(fs.readFileSync(0, 'utf8')); } catch { /* no/bad stdin is fine */ }
 }
 
@@ -291,9 +295,9 @@ try {
     process.exit(2);
   }
   // Same reasoning as the exists-check above: `state` answers questions about a repo that may
-  // not be set up (or may have a broken config) rather than going silent. The defaults already
-  // assigned above (`gates = {}` etc.) are enough — the `state` branch never reads them.
-  if (MODE !== 'state') process.exit(0);
+  // not be set up (or may have a broken config) rather than going silent, and `arm`/`disarm`
+  // never read `gates` at all. The defaults already assigned above (`gates = {}` etc.) are enough.
+  if (MODE !== 'state' && MODE !== 'arm' && MODE !== 'disarm') process.exit(0);
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1070,6 +1074,18 @@ async function main() {
     if (!fs.existsSync(markerPath)) process.exit(0);
     const idle = markerIdleMs(markerPath);
     if (idle !== null && idle > MARKER_MAX_IDLE_MS) process.exit(0);
+
+    // Same ownership rule as the `full` branch: a write from a session that does not hold the
+    // marker is not this run's to guard, and an unclaimed marker is claimed by whichever hook
+    // sees it first.
+    const owner = markerOwner(markerPath);
+    const me = mySession();
+    if (owner === '') {
+      try { fs.writeFileSync(markerPath, me); } catch { /* best-effort */ }
+    } else if (owner !== me && me !== '') {
+      process.exit(0);
+    }
+
     console.error(`ristretto: ${path.basename(file)} holds this repo's house rules — ristretto reads it, never writes it.`);
     console.error('  Whatever is stale there goes in your final message instead; the user decides what lands in that file.');
     console.error('  (Only while a ristretto run is armed — outside one, edit it freely.)');
@@ -1148,6 +1164,33 @@ async function main() {
       console.log(`unrecognised: ${unrecognised.length} file(s) — ${unrecognised.slice(0, 10).join(', ')}`);
     }
 
+    process.exit(0);
+  }
+
+  // The commands no longer know these filenames. Three different cleanup lists is how a `pull`
+  // after a `brew` left `orchestrating` behind — and while that file exists, Stop does not gate
+  // at all, with no error and no symptom.
+  if (MODE === 'arm') {
+    const me = mySession();
+    fs.mkdirSync(path.join(projectDir, '.ristretto', 'build'), { recursive: true });
+    const prior = markerOwner(markerPath);
+    if (prior !== null && prior !== '' && prior !== me) {
+      const idle = markerIdleMs(markerPath);
+      const age = idle === null ? 'an unreadable age' : `${Math.round(idle / 60000)}min`;
+      console.error(`ristretto: .ristretto/pulling belongs to another session (idle ${age}) — taking it over.`);
+      console.error('  If a run really is live in another window, stop it: two runs share one branch and one gate lock.');
+    }
+    fs.writeFileSync(markerPath, me);
+    if (ARG === 'orchestrator') fs.writeFileSync(orchestratingPath, me);
+    process.exit(0);
+  }
+
+  if (MODE === 'disarm') {
+    // Everything a run creates, in one place. `build/` is deliberately absent: a plan that was
+    // paid for and never implemented outlives the run, and its closer deletes it.
+    for (const p of [markerPath, orchestratingPath, retriesPath, stalledPath]) {
+      try { fs.unlinkSync(p); } catch { /* never existed */ }
+    }
     process.exit(0);
   }
 
@@ -1260,19 +1303,32 @@ async function main() {
   }
 
   if (MODE === 'full') {
-    if (!fs.existsSync(markerPath)) process.exit(0); // only gate while a pull is active
+    if (!fs.existsSync(markerPath)) process.exit(0); // only gate while a run is active
 
-    // A marker nobody disarmed keeps gating sessions that are not pulls. Age it out rather than
+    // A marker nobody disarmed keeps gating sessions that are not runs. Age it out rather than
     // silently arming a session that never asked — and say so, so it gets cleaned up.
     const markerIdle = markerIdleMs(markerPath);
     if (markerIdle !== null && markerIdle > MARKER_MAX_IDLE_MS) {
       console.error(`ristretto: .ristretto/pulling has seen no gate run for ${Math.round(markerIdle / 3600000)}h — treating it as a leftover from a dead session and NOT gating.`);
-      console.error('  If a pull really is in progress, touch the marker; otherwise delete it.');
+      console.error('  If a run really is in progress, run `gate.js arm`; otherwise `gate.js disarm`.');
       process.exit(0);
     }
+
+    // Whose run is this? A marker from a dead session used to gate every later session in the
+    // repo — and because the wrong gating refreshed the marker, it could never expire. Only the
+    // owner gates, and only the owner refreshes.
+    const owner = markerOwner(markerPath);
+    const me = mySession();
+    if (owner === '') {
+      try { fs.writeFileSync(markerPath, me); } catch { /* best-effort */ }
+    } else if (owner !== me && me !== '') {
+      console.error('ristretto: .ristretto/pulling belongs to another session — not gating this one.');
+      console.error('  If that run is over, `gate.js disarm` clears it.');
+      process.exit(0);
+    }
+
     // This run counts as activity. Without it, "old" would mean total age and a batch that runs
-    // longer than the window would disarm its own gates halfway through — the exact opposite of
-    // what an unattended run needs.
+    // longer than the window would disarm its own gates halfway through.
     try { const t = Date.now() / 1000; fs.utimesSync(markerPath, t, t); } catch { /* best-effort */ }
 
     // A subagent stopping is the only proof that a brew loop is actually alive — nothing else

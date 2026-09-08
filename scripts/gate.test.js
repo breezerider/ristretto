@@ -26,7 +26,11 @@ function gate(dir, mode, stdin = '{}', env = {}, arg) {
   return spawnSync(process.execPath, arg ? [GATE, mode, arg] : [GATE, mode], {
     input: stdin,
     encoding: 'utf8',
-    env: { ...process.env, CLAUDE_PROJECT_DIR: dir, ...env },
+    // Cleared by default, not just spread from the parent: this suite is itself often run from
+    // inside a live Claude Code session, whose real CLAUDE_CODE_SESSION_ID would otherwise leak
+    // into every child process and silently win over the session_id a test puts on stdin. Tests
+    // that mean to exercise the env var pass it explicitly via `env`, which still overrides this.
+    env: { ...process.env, CLAUDE_PROJECT_DIR: dir, CLAUDE_CODE_SESSION_ID: '', ...env },
   });
 }
 
@@ -424,7 +428,7 @@ fs.utimesSync(path.join(dir, '.ristretto', 'pulling'), old, old);
 r = gate(dir, 'full');
 assert.strictEqual(r.status, 0, 'a stale marker must not gate a session that never asked');
 assert.ok(r.stderr.includes('no gate run for 48h'), 'the staleness must be reported as idleness, with its duration');
-assert.ok(r.stderr.includes('delete it'), 'the report must say how to clear it');
+assert.ok(r.stderr.includes('gate.js disarm'), 'the report must say how to clear it');
 
 // 43. A fresh marker gates exactly as before — the age-out must not weaken a live pull.
 arm(dir);
@@ -1297,5 +1301,90 @@ assert.ok(/pulling: armed, unclaimed/.test(r.stdout), 'unclaimed marker must rea
 assert.ok(!/armed by unclaimed/.test(r.stdout), '"armed by unclaimed" is not a sentence — got: ' + r.stdout);
 assert.ok(/\b6h ago\b/.test(r.stdout), 'a 6-hour-old marker must render in hours, not raw seconds — got: ' + r.stdout);
 assert.ok(!/21600s ago/.test(r.stdout), 'idle time must not be printed as raw seconds once it is this large — got: ' + r.stdout);
+
+// 117. `arm` creates the marker and stamps it with this session.
+dir = tmpRepo(JSON.stringify({ gates: { test: PASS } }));
+r = gate(dir, 'arm', '{}', { CLAUDE_CODE_SESSION_ID: 'sess-aaa' });
+assert.strictEqual(r.status, 0, 'arm must exit 0');
+assert.strictEqual(fs.readFileSync(path.join(dir, '.ristretto', 'pulling'), 'utf8').trim(), 'sess-aaa',
+  'arm must stamp the marker with the session');
+
+// 118. `arm orchestrator` additionally creates the orchestrating marker.
+r = gate(dir, 'arm', '{}', { CLAUDE_CODE_SESSION_ID: 'sess-aaa' }, 'orchestrator');
+assert.ok(fs.existsSync(path.join(dir, '.ristretto', 'orchestrating')), 'arm orchestrator must create it');
+
+// 119. `arm` in the SAME session is idempotent — "the API died, I fire again" must just work.
+r = gate(dir, 'arm', '{}', { CLAUDE_CODE_SESSION_ID: 'sess-aaa' });
+assert.strictEqual(r.status, 0, 'arming twice in one session must not fail');
+
+// 120. `arm` never refuses over a foreign marker — it takes over and says so.
+r = gate(dir, 'arm', '{}', { CLAUDE_CODE_SESSION_ID: 'sess-ccc' });
+assert.strictEqual(r.status, 0, 'arm must never refuse');
+assert.strictEqual(fs.readFileSync(path.join(dir, '.ristretto', 'pulling'), 'utf8').trim(), 'sess-ccc',
+  'arm must take the marker over');
+assert.ok(/taking it over|another session/i.test(r.stderr), 'a takeover must be said out loud — got: ' + r.stderr);
+
+// 121. `arm` works even with no `.ristretto.json` at all — same exemption as `state`. A first
+//      `arm` in a repo that has not run `prep` yet must not be refused for lack of config.
+dir = tmpRepo(); // no .ristretto.json
+r = gate(dir, 'arm', '{}', { CLAUDE_CODE_SESSION_ID: 'sess-fresh' });
+assert.strictEqual(r.status, 0, 'arm without a config file must exit 0');
+assert.strictEqual(fs.readFileSync(path.join(dir, '.ristretto', 'pulling'), 'utf8').trim(), 'sess-fresh',
+  'arm without a config file must still stamp the marker');
+
+// 122. A gate run from a FOREIGN session does not gate — the stale-marker bug.
+dir = tmpRepo(JSON.stringify({ gates: { lint: FAIL } }));
+fs.mkdirSync(path.join(dir, '.ristretto'), { recursive: true });
+fs.writeFileSync(path.join(dir, '.ristretto', 'pulling'), 'sess-owner');
+r = gate(dir, 'full', JSON.stringify({ session_id: 'sess-stranger' }));
+assert.strictEqual(r.status, 0, 'a foreign session must not be gated by someone else\'s marker');
+
+// 123. …and it must not refresh the marker either. The wrong gating kept it alive before.
+const before = fs.statSync(path.join(dir, '.ristretto', 'pulling')).mtimeMs;
+gate(dir, 'full', JSON.stringify({ session_id: 'sess-stranger' }));
+assert.strictEqual(fs.statSync(path.join(dir, '.ristretto', 'pulling')).mtimeMs, before,
+  'a foreign session must never refresh the marker');
+
+// 124. The OWNING session is gated normally.
+r = gate(dir, 'full', JSON.stringify({ session_id: 'sess-owner' }));
+assert.strictEqual(r.status, 2, 'the owning session must still be gated by a failing gate');
+
+// 125. An unclaimed marker is claimed by the first hook that sees it, then gates.
+dir = tmpRepo(JSON.stringify({ gates: { lint: FAIL } }));
+arm(dir); // writes an empty marker, as `arm` does when no session id is available
+r = gate(dir, 'full', JSON.stringify({ session_id: 'sess-first' }));
+assert.strictEqual(r.status, 2, 'an unclaimed marker must gate the session that claims it');
+assert.strictEqual(fs.readFileSync(path.join(dir, '.ristretto', 'pulling'), 'utf8').trim(), 'sess-first',
+  'the first hook must claim the marker');
+
+// 126. `disarm` removes every file a run created — one list, one place — but never build/.
+dir = tmpRepo(JSON.stringify({ gates: { test: PASS } }));
+fs.mkdirSync(path.join(dir, '.ristretto', 'build'), { recursive: true });
+for (const f of ['pulling', 'orchestrating', 'gate-retries', 'gate-stalled']) {
+  fs.writeFileSync(path.join(dir, '.ristretto', f), '');
+}
+fs.writeFileSync(path.join(dir, '.ristretto', 'build', 'BREW-9.md'), 'x');
+r = gate(dir, 'disarm');
+assert.strictEqual(r.status, 0, 'disarm must exit 0');
+for (const f of ['pulling', 'orchestrating', 'gate-retries', 'gate-stalled']) {
+  assert.ok(!fs.existsSync(path.join(dir, '.ristretto', f)), `disarm must remove ${f}`);
+}
+assert.ok(fs.existsSync(path.join(dir, '.ristretto', 'build', 'BREW-9.md')),
+  'disarm must NOT touch build/ — a plan the user paid for outlives the run');
+
+// 127. `disarm` on an already-clean repo is not an error.
+assert.strictEqual(gate(dir, 'disarm').status, 0, 'disarm must be idempotent');
+
+// 128. `guard` is ownership-aware too, same rule as `full`: a marker owned by another session
+//      does not guard this one.
+dir = tmpRepo(JSON.stringify({ gates: { lint: PASS } }));
+arm(dir);
+fs.writeFileSync(path.join(dir, '.ristretto', 'pulling'), 'sess-owner');
+r = gate(dir, 'guard', JSON.stringify({ tool_input: { file_path: 'CLAUDE.md' }, session_id: 'sess-stranger' }));
+assert.strictEqual(r.status, 0, 'a foreign session must not be guarded by someone else\'s marker');
+
+// 129. …but the owner is still guarded.
+r = gate(dir, 'guard', JSON.stringify({ tool_input: { file_path: 'CLAUDE.md' }, session_id: 'sess-owner' }));
+assert.strictEqual(r.status, 2, 'the owning session must still be guarded from writing house rules');
 
 console.log('gate.test.js: all checks passed');
