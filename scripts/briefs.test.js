@@ -77,4 +77,17 @@ for (const fp of ['tick a box', 'about production', 'cheapest level', 'per crite
 }
 assert.ok(words(common) < 450, `common.md is ${words(common)} words — it is shared, so every role pays it`);
 
+// 8. The implementer brief is short, reads common.md, and ends with prove.
+const impl = read('briefs/implementer.md');
+assert.ok(/common\.md/.test(impl), 'implementer.md must send the reader to common.md');
+assert.ok(/gate\.js" prove|gate\.js prove/.test(impl), 'the final proof is `gate.js prove`');
+assert.ok(!/30–60 seconds/.test(impl), 'the polling cadence paragraph is replaced by prove');
+assert.ok(/maximum timeout/.test(impl), 'prove is run with the tool\'s maximum timeout, with the background fallback as a conditional');
+assert.ok(!/exactly as `?\.ristretto\.json`? spells them/.test(impl), 'the hand-rolled-command paragraph is replaced by prove');
+assert.ok(words(impl) < 800, `implementer.md is ${words(impl)} words — baseline was 1443`);
+
+// 9. Together with common.md, a dispatch is well under the 1901-word baseline.
+assert.ok(words(impl) + words(read('briefs/common.md')) < 1300,
+  'an implementer dispatch must cost well under 1901 words — 1300 is the target, not the baseline');
+
 console.log('briefs.test.js: all checks passed');
