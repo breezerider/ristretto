@@ -90,4 +90,24 @@ assert.ok(words(impl) < 800, `implementer.md is ${words(impl)} words — baselin
 assert.ok(words(impl) + words(read('briefs/common.md')) < 1300,
   'an implementer dispatch must cost well under 1901 words — 1300 is the target, not the baseline');
 
+// 10. Each role brief exists, defers to common.md, and does not restate it.
+const CAPS = { 'briefs/planner.md': [450, 800], 'briefs/reviewer.md': [450, 700], 'briefs/closer.md': [350, 600] };
+for (const [b, [own, total]] of Object.entries(CAPS)) {
+  const t = read(b);
+  assert.ok(/common\.md/.test(t), `${b} must send the reader to common.md`);
+  assert.ok(words(t) < own, `${b} is ${words(t)} words (cap ${own})`);
+  assert.ok(words(t) + words(read('briefs/common.md')) < total, `${b} + common.md exceeds ${total} — no role may pay more than today`);
+}
+
+// 11. The reviewer's three buckets and its fixed final line survive intact.
+const rev = read('briefs/reviewer.md');
+for (const s of ['block', 'note', 'lean', 'review: clean', 'review: notes-only', 'review: blocking']) {
+  assert.ok(rev.includes(s), `reviewer.md must keep "${s}"`);
+}
+
+// 12. The closer records the round count — a verdict without it is a measurement thrown away.
+const closer = read('briefs/closer.md');
+assert.ok(closer.includes('rounds: <n>') && closer.includes('open: <b> block'), 'closer.md must give the Evidence review line as a fixed template');
+assert.ok(closer.includes('git add -A') && closer.includes('plain ASCII'), 'the git rules live in closer.md');
+
 console.log('briefs.test.js: all checks passed');
