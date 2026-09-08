@@ -145,4 +145,19 @@ assert.ok(/implementer\.md/.test(shot), 'shot must read the implementer brief');
 assert.ok(!/Add a `planned` row|in prep's format/.test(shot), 'shot no longer writes plans — prep always runs first');
 assert.ok(/prep/.test(shot), 'shot must say prep runs first');
 
+// 17. brew is an orchestrator: it dispatches by path and keeps its own rules only.
+const brew = read('commands/brew.md');
+assert.ok(words(brew) < 2200, `brew.md is ${words(brew)} words — was 9220`);
+for (const b of ['planner.md', 'implementer.md', 'reviewer.md', 'closer.md']) {
+  assert.ok(brew.includes(b), `brew must dispatch ${b} by path`);
+}
+assert.ok(/gate\.js" arm .*orchestrator|arm orchestrator/.test(brew), 'brew must arm as orchestrator');
+assert.ok(!/You are the independent REVIEW gate/.test(brew), 'the review brief must not be pasted back in');
+assert.ok(/3 rounds|capped at 3/.test(brew), 'brew keeps its 3-round cap');
+assert.ok(!/append.*easy|appended with/.test(brew), 'the forced-easy lane must never edit the Tier cell');
+
+// 18. The green-tree rule is honoured everywhere, not contradicted twelve lines later.
+assert.ok(!/`git restore`/.test(brew) || /gate\.js" state|proven green/.test(brew),
+  'any git restore in brew must be gated on the tree not being proven green');
+
 console.log('briefs.test.js: all checks passed');
