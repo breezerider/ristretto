@@ -16,7 +16,7 @@ See common.md's Lean code section for what "lean" means. One rule that's yours a
 
 ## Finish with prove
 
-Finish with `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.js" prove`, run with the tool's maximum timeout. If it cannot finish inside one call, start it in the background and poll it from this turn until it ends — never end a turn with it running. Exit 0 → report. Exit 1 → fix and run it again. Exit 3 → the tree is unverified: stop, and your final message is `blocked: <ID> — gate '<name>' unverified: <the reason prove printed>`.
+Finish with `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.js" prove`, run with the tool's maximum timeout. If it cannot finish inside one call, start it in the background and poll it from this turn until it ends — never end a turn with it running. Exit 0 → report. Exit 1 → fix and run it again. Exit 3 → the tree is unverified: stop, and your final message is `blocked: <FEATURE-ID> — gate '<name>' unverified: <the reason prove printed>`.
 
 ## Do not commit, archive, or touch the roadmap
 
@@ -24,7 +24,7 @@ An independent review runs after you.
 
 ## Skip, never guess
 
-A real product decision the plan does not make, a missing contract, gates you cannot get green honestly → leave the tree as it is, set the row `blocked` with the gap phrased as what the plan failed to decide, stop. Do not `git restore`: if `gate.js state` reports the tree proven green, that work is finished and belongs committed.
+A real product decision the plan does not make, a missing contract, gates you cannot get green honestly → leave the tree as it is, stop, and report `blocked: <FEATURE-ID> — <spec gap>` phrased as what the plan failed to decide — the caller sets the row, not you. Do not `git restore`: if `gate.js state` reports the tree proven green, that work is finished and belongs committed.
 
 ## No scope creep
 
@@ -39,7 +39,7 @@ While expanding an easy contract, stop before writing any code and return `escal
 3. it must create public surface not named in `Provides:`;
 4. any acceptance criterion is `[human]`.
 
-Never lower a tier yourself — an escalation just means the label was optimistic. On a forced-easy run (you'll be told at dispatch), there is no `escalate:`: build it anyway, and put `would-escalate: <trigger>` in your trailing lines instead, naming which trigger fired. That line is never optional and never softened, and it never edits the roadmap's `Tier` cell — only a real `escalate:`, handled by the orchestrator, does that.
+Never lower a tier yourself — an escalation just means the label was optimistic. Never reach for `blocked:` here instead — `blocked` holds back every dependent feature; an escalation is just a tier label that was optimistic. On a forced-easy run (you'll be told at dispatch), there is no `escalate:`: build it anyway, and put `would-escalate: <trigger>` in your trailing lines instead, naming which trigger fired. If you were told nothing about forced-easy, this is not one. That line is never optional and never softened, and it never edits the roadmap's `Tier` cell — only a real `escalate:`, handled by the orchestrator, does that.
 
 ## If you were dispatched as a fixer
 
