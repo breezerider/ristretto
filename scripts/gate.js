@@ -1077,6 +1077,69 @@ function hangAdvice(gate, result, usedSec) {
   return lines.join('\n');
 }
 
+// --- Config problems the runner can see for itself. ---
+// Each of these was a paragraph in a doc that a human had to read and obey; saying it here, with
+// the actual command in view, is strictly better — and it is the difference between a rule and a
+// check. Shared between `verify` (the pre-flight, where a whole batch is still cheap to fix) and
+// the `full` hook (which sees every stop, so a repo that skips `verify` still hears about it).
+function auditConfig() {
+  if (gates.format && !(Array.isArray(gates.formatPaths) && gates.formatPaths.length)) {
+    console.error('ristretto: a "format" gate is set but "formatPaths" is not — the formatter will rewrite');
+    console.error('  every file anyone edits, including docs and generated files. List what it is canonical for.');
+  }
+
+  // `<key>:ms` — the gate's own wall-clock length on its last green run, recorded by runGates
+  // beside the quiet record. NOT observedQuiet[key]: that is the longest SILENT GAP of a green
+  // run, not the run's length, and reads as ~1s even on a ten-minute suite that talks the whole
+  // way through. The hook calls this after the loop that just recorded this run's number; `verify`
+  // calls it after its own loop for the same reason — either way this fires on a real measurement.
+  const slowMs = Number(process.env.RISTRETTO_SLOW_TEST_MS) || SLOW_TEST_HINT_MS;
+  const testMs = observedQuiet['test:ms'];
+  if (gates.test && !gates.testChanged && Number.isFinite(testMs) && testMs >= slowMs) {
+    console.error(`ristretto: the full test suite took ${Math.round(testMs / 1000)}s, and it will run again at every stop — no "gates"."testChanged" is configured.`);
+    console.error('  Scope the loop to what each feature touches; the whole repo is still proven by `gate.js verify` at the end.');
+    console.error('  One runner:  "testChanged": "<related-tests command> {files}"');
+    console.error('  Several:     "testChanged": [{ "match": ["backend/**/*.py"], "cmd": "..." }, { "match": ["frontend/**"], "cmd": "..." }]');
+  }
+
+  // The mirror of it: a scoped gate is the fast path by definition, so one that runs this long is
+  // a defect in the scoping, not a fact about the repo.
+  const scopedMs = observedQuiet['testChanged:ms'];
+  if (gates.testChanged && Number.isFinite(scopedMs) && scopedMs >= SLOW_SCOPED_HINT_MS) {
+    console.error(`ristretto: the scoped test gate took ${Math.round(scopedMs / 1000)}s — that is the fast path, so something is wrong with it.`);
+    console.error('  Most often it dropped the parallelism the full "test" gate has: compare the two commands in .ristretto.json');
+    console.error('  and give the scoped one the same flags (-n auto, --parallel, -T, ...). A scoped run that is slower than the');
+    console.error('  whole suite is worse than no scoping at all. Otherwise the route is matching more than the feature touched.');
+  }
+
+  const QUIET = [/(^|\s)-q(\s|$)/, /--no-progress/, /--quiet/, /--reporter[= ](silent|dot|summary)/];
+  for (const key of ['test', 'testChanged']) {
+    const cmds = Array.isArray(gates[key]) ? gates[key].map((route) => (route && route.cmd) || '') : [gates[key] || ''];
+    for (const cmd of cmds) {
+      if (QUIET.some((re) => re.test(cmd))) {
+        console.error(`ristretto: "${key}" carries a flag that silences the runner: ${cmd}`);
+        console.error('  Hang detection reads the gate\'s output — a mute suite is indistinguishable from a wedged');
+        console.error('  one for its whole run, and raising "silence" cannot help past the watchdog. Keep the stream.');
+        break;
+      }
+    }
+  }
+
+  // Every changed path this config's routes don't cover. Reported at pre-flight, where it costs
+  // nothing to hear about it — falling back to the full suite is safe, but silent, and only shows
+  // up later as a loop that unexpectedly drags. Reuses `matchesAny`, the same matcher `testChanged`
+  // routing uses at runtime, rather than a second glob implementation that could drift from it.
+  if (Array.isArray(gates.testChanged)) {
+    const paths = dirtyPaths() || [];
+    const uncovered = paths.filter((p) => !gates.testChanged.some((entry) => entry && matchesAny(p, entry.match)));
+    if (uncovered.length) {
+      console.error(`ristretto: ${uncovered.length} changed path(s) match no "testChanged" route and fall back to the full suite:`);
+      for (const p of uncovered.slice(0, 10)) console.error(`  ${p}`);
+      console.error('  Safe, but slow — and invisible until a run goes quiet. Completing the routes is what keeps the loop fast.');
+    }
+  }
+}
+
 // The gate-running core: acquire the lock, run the configured list against the tree, attribute
 // each result against the baseline, and on a clean pass write the green fingerprint. Every mode
 // that actually executes gates shares this one — `verify`, the `full` hook, and `prove` differ
@@ -1109,7 +1172,7 @@ async function runGates({ scoped, stopOnStall, mayCreateBaseline, skipIfProven, 
     let lastGreen = null;
     try { lastGreen = fs.readFileSync(greenPath, 'utf8'); } catch { /* nothing proven yet */ }
     if (fp !== null && fp === lastGreen) {
-      return { ok: true, stalled: false, results: [], failures: '', unscopedTestMs: 0, slowScoped: [], alreadyProven: true };
+      return { ok: true, stalled: false, results: [], failures: '', alreadyProven: true };
     }
   }
 
@@ -1117,8 +1180,6 @@ async function runGates({ scoped, stopOnStall, mayCreateBaseline, skipIfProven, 
   const results = [];
   let failures = '';
   let hung = false;
-  let unscopedTestMs = 0;
-  const slowScoped = [];
 
   for (const gate of gateList(scoped)) {
     const gateStartedAt = Date.now();
@@ -1166,14 +1227,11 @@ async function runGates({ scoped, stopOnStall, mayCreateBaseline, skipIfProven, 
     // is a suite that was already red for reasons this change did not cause, and a zero exit with
     // new failures in the report still blocks.
     if (attributed ? attributedPass : result === null) {
-      // A full suite ran because nothing scoped it. Remember how long that cost.
-      if (result === null && gate.key === 'test' && !gates.testChanged) unscopedTestMs = Date.now() - gateStartedAt;
-      // And the mirror of it: a scoped gate is the fast path by definition, so one that runs this
-      // long is misconfigured.
-      const scopedMs = Date.now() - gateStartedAt;
-      if (gate.key === 'testChanged' && scopedMs >= SLOW_SCOPED_HINT_MS) {
-        slowScoped.push({ label: gate.label, secs: Math.round(scopedMs / 1000) });
-      }
+      // A gate's own wall-clock cost, on every green run — beside the quiet record, under a key
+      // that cannot collide with PROBATION. `auditConfig` reads this back, so a slow suite or a
+      // slow scoped route is a fact the runner measured, not a paragraph a human has to remember
+      // to go check.
+      recordQuiet(`${gate.key}:ms`, Date.now() - gateStartedAt);
       results.push(`${gate.label} ✓`);
       continue;
     }
@@ -1187,7 +1245,7 @@ async function runGates({ scoped, stopOnStall, mayCreateBaseline, skipIfProven, 
         // Surface immediately rather than let the caller loop back to a gate that hangs again,
         // burning a whole retry budget on the same wall — the exact wedge this avoids.
         try { fs.mkdirSync(path.dirname(stalledPath), { recursive: true }); fs.writeFileSync(stalledPath, gate.label); } catch { /* best-effort */ }
-        return { ok: false, stalled: true, results, failures: advice, unscopedTestMs, slowScoped };
+        return { ok: false, stalled: true, results, failures: advice };
       }
       failures += `\n${advice}`;
       continue;
@@ -1197,7 +1255,7 @@ async function runGates({ scoped, stopOnStall, mayCreateBaseline, skipIfProven, 
       : `\n--- ristretto gate '${gate.label}' FAILED ---\n${result.output.split('\n').slice(-40).join('\n')}`;
   }
 
-  if (failures) return { ok: false, stalled: hung, results, failures, unscopedTestMs, slowScoped };
+  if (failures) return { ok: false, stalled: hung, results, failures };
 
   // Nothing is hung any more. A marker left from an older run keeps saying one is, with no expiry
   // and nothing to contradict it — state that lies is worse than state that is missing.
@@ -1207,7 +1265,7 @@ async function runGates({ scoped, stopOnStall, mayCreateBaseline, skipIfProven, 
   if (green !== null) {
     try { fs.mkdirSync(path.dirname(greenPath), { recursive: true }); fs.writeFileSync(greenPath, green); } catch { /* best-effort */ }
   }
-  return { ok: true, stalled: false, results, failures: '', unscopedTestMs, slowScoped };
+  return { ok: true, stalled: false, results, failures: '' };
 }
 
 async function main() {
@@ -1380,6 +1438,9 @@ async function main() {
       console.error('  The tree is UNVERIFIED, not red. Let that run finish, then verify again.');
       process.exit(1);
     }
+    // After the loop, not before: the slow-suite/slow-scoped checks inside read the duration this
+    // very run just recorded, not only a stale number left over from whichever run happened last.
+    auditConfig();
     if (!r.results.length) {
       console.log('gates: none configured — nothing to verify');
       process.exit(0);
@@ -1496,18 +1557,7 @@ async function main() {
 
     if (r.ok) {
       if (driftNote) console.error(driftNote.trim());
-      if (r.unscopedTestMs >= SLOW_TEST_HINT_MS) {
-        console.error(`ristretto: the full test suite took ${Math.round(r.unscopedTestMs / 1000)}s, and it will run again at every stop — no "gates"."testChanged" is configured.`);
-        console.error('  Scope the loop to what each feature touches; the whole repo is still proven by `gate.js verify` at the end.');
-        console.error('  One runner:  "testChanged": "<related-tests command> {files}"');
-        console.error('  Several:     "testChanged": [{ "match": ["backend/**/*.py"], "cmd": "..." }, { "match": ["frontend/**"], "cmd": "..." }]');
-      }
-      for (const s of r.slowScoped) {
-        console.error(`ristretto: the scoped gate '${s.label}' took ${s.secs}s — that is the fast path, so something is wrong with it.`);
-        console.error('  Most often it dropped the parallelism the full "test" gate has: compare the two commands in .ristretto.json');
-        console.error('  and give the scoped one the same flags (-n auto, --parallel, -T, ...). A scoped run that is slower than the');
-        console.error('  whole suite is worse than no scoping at all. Otherwise the route is matching more than the feature touched.');
-      }
+      auditConfig();
       try { fs.unlinkSync(retriesPath); } catch { /* never existed */ }
       process.exit(0);
     }

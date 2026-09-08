@@ -601,7 +601,7 @@ const scopedHint = /const SLOW_SCOPED_HINT_MS = ([^;]+);/.exec(gateSrc);
 assert.ok(scopedHint, 'SLOW_SCOPED_HINT_MS must stay a plain literal this check can read');
 assert.ok(eval(scopedHint[1]) <= 600 * 1000,
   'SLOW_SCOPED_HINT_MS must stay under the ~600s agent stall watchdog');
-assert.ok(/gate\.key === 'testChanged' && scopedMs >= SLOW_SCOPED_HINT_MS/.test(gateSrc),
+assert.ok(/scopedMs >= SLOW_SCOPED_HINT_MS/.test(gateSrc),
   'the hint must stay wired to the scoped gate — an unwired hint is silently never emitted');
 
 // 57. THE ONE THAT WOULD HAVE SAVED THE RUN. A scoped route that dropped a flag its full `test`
@@ -1532,5 +1532,36 @@ r = gate(dir, 'prove');
 assert.strictEqual(r.status, 3, 'a broken config must leave prove UNVERIFIED (3), not green (0) or red (1)');
 assert.ok(r.stderr.includes('.ristretto.json'), 'the error must name the config file — got: ' + r.stderr.slice(0, 200));
 assert.ok(!fs.existsSync(path.join(dir, '.ristretto', 'gate-green')), 'a broken config must not let prove write a fingerprint');
+
+// --- Task 5: four config detections `verify` (and the `full` hook) can name for themselves. ---
+
+// 143. A format gate with no formatPaths rewrites files it does not own. Say so.
+dir = tmpRepo(JSON.stringify({ gates: { format: PASS, test: PASS } }));
+r = gate(dir, 'verify');
+assert.ok(/formatPaths/.test(r.stderr), 'an unscoped formatter must be named — got: ' + r.stderr.slice(0, 300));
+
+// 144. A slow suite with no testChanged is what makes a batch never finish. The hint reads a
+//      wall-clock DURATION recorded by runGates on this very run (not observedQuiet['test'], the
+//      longest silent GAP of a green run — on a chatty ten-minute suite that reads ~1s and never
+//      fires). `verify` calls the audit after its gate loop, so it sees the number this run just
+//      recorded rather than only a stale one from whichever run happened to go last.
+dir = tmpRepo(JSON.stringify({ gates: { test: SLOW } })); // SLOW talks for ~3s
+r = gate(dir, 'verify', '{}', { RISTRETTO_SLOW_TEST_MS: '1' }); // threshold override for the test
+assert.ok(/testChanged/.test(r.stderr), 'a slow suite with no scoping must be named — got: ' + r.stderr.slice(0, 300));
+
+// 145. A flag that silences the runner deletes the only evidence a slow gate is alive.
+dir = tmpRepo(JSON.stringify({ gates: { test: 'pytest -q --no-progress' } }));
+r = gate(dir, 'verify');
+assert.ok(/silence|quiet|--no-progress|-q\b/.test(r.stderr), 'a silencing flag must be named — got: ' + r.stderr.slice(0, 300));
+
+// 146. Paths matching no route fall back to the full suite. That is safe but slow, and it is
+//      invisible — the pre-flight is where it costs nothing to hear about it. Needs a real git
+//      repo: the check reads dirtyPaths(), which is null (and so reports nothing) outside one.
+dir = gitTmpRepo(JSON.stringify({
+  gates: { test: PASS, testChanged: [{ name: 'be', match: ['backend/**'], cmd: PASS }] },
+}));
+fs.writeFileSync(path.join(dir, 'frontend.txt'), 'untracked, and matches no route');
+r = gate(dir, 'verify');
+assert.ok(/route|uncovered|falls back/i.test(r.stderr), 'route gaps must be reported at pre-flight — got: ' + r.stderr.slice(0, 400));
 
 console.log('gate.test.js: all checks passed');
