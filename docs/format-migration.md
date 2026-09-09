@@ -101,6 +101,19 @@ meaning, and worse than leaving the feature off.
 2. **Every existing row gets `normal`.** This is not a judgement, and you must not make one: `normal` is exactly the behaviour every existing row already had, so a migrated project builds identically to how it built yesterday. Never infer `easy` from a row's title, size, or status — inferring would be deciding something, which a migration may not do.
 3. Nothing else changes. No plan file is touched, no status reinterpreted, no criterion reclassified.
 
+### → 0.17 — every rule in one place, and gate.js owns `.ristretto/`
+
+1. **Roadmap `Tier` cells hold one token.** A forced-easy run used to append `easy` to the cell, leaving rows that read `normal easy`. Keep the first token only. The forced label is not lost: the archived plan's `## Evidence` already records `tier: easy (forced)`, which is where it belongs.
+2. Nothing else on disk changes shape. Archived plans written before 0.17 record their review verdict in prose; from 0.17 the closer writes a fixed line (`review: … · rounds: <n> · open: …`), and `brew`'s report reads that line. Older plans are left as they are — an archived plan is history.
+3. **Say this, once:**
+
+   ```
+   ☕ ristretto 0.17: gate.js now owns .ristretto/. Run `gate.js state` before touching anything
+     in there by hand — a marker left by a run that died no longer gates other sessions, and a
+     dirty tree it reports PROVEN GREEN is finished work to commit, not to discard.
+     `shot` now builds a feature `prep` already planned; it no longer writes plans itself.
+   ```
+
 ## 3. Stamp, report, and carry on
 
 ```
