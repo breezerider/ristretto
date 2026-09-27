@@ -47,6 +47,11 @@ THE REST OF THE MENU
                                     filters: open | done | blocked | checks | ID | flight
   /ristretto:tamp [target] [fix]    lean-code review of a diff/file: waste,
                                     duplication, over-build. "fix" applies.
+  /ristretto:strata <range> [opts]  collapse the docs/ristretto planning trail on a
+                                    branch into one docs(ristretto) commit, keeping
+                                    non-docs commits intact. branch or rewrite mode,
+                                    optional --mr and --fold.
+                                    argument-hint: <range> [--mode branch|rewrite] [--ticket ID] [--mr] [--fold]
   /ristretto:help                   this menu.
 
 HOUSE RULES
