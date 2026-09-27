@@ -23,7 +23,7 @@ step creates it. Without `bun run build`, the local-clone install does not resol
 tree (skills, gate runner, LSP server, manifest):
 
 ```json
-{ "plugin": ["ristretto@0.16.0"] }
+{ "plugin": ["ristretto@0.17.0"] }
 ```
 
 **Via npx** — copies the plugin, commands, and gate runner into the OpenCode config
@@ -88,7 +88,7 @@ npm pack --dry-run
 bun publish   # or: npm publish
 ```
 
-Pin version: OpenCode resolves `latest` once and caches it, so bump the `@0.16.0`
+Pin version: OpenCode resolves `latest` once and caches it, so bump the `@0.17.0`
 pin in `package.json` on every release.
 
 ## Usage

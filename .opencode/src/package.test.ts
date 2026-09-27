@@ -7,9 +7,9 @@ import path from "node:path"
 
 const REPO = process.cwd()
 
-test("package.json version is 0.16.0", () => {
+test("package.json version is 0.17.0", () => {
   const pkg = JSON.parse(readFileSync(path.join(REPO, "package.json"), "utf8"))
-  expect(pkg.version).toBe("0.16.0")
+  expect(pkg.version).toBe("0.17.0")
 })
 
 test("npm pack --dry-run ships ristretto/ contents, not commands/ or scripts/gate.js", () => {

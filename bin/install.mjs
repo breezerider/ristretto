@@ -197,6 +197,8 @@ function writeCommand(src, dest, prefix) {
     .replace(NAMESPACE_RE, "/ristretto-$1")
     .replaceAll("${CLAUDE_PLUGIN_ROOT}/scripts/", ristrettoDir + "/")
     .replaceAll("${CLAUDE_PLUGIN_ROOT}/docs/", ristrettoDir + "/")
+    .replaceAll("${CLAUDE_PLUGIN_ROOT}/briefs/", ristrettoDir + "/briefs/")
+    .replaceAll("${CLAUDE_PLUGIN_ROOT}/reference/", ristrettoDir + "/reference/")
     // Any other ${CLAUDE_PLUGIN_ROOT} reference → the install prefix.
     .replaceAll("${CLAUDE_PLUGIN_ROOT}", prefix)
   writeFileSync(dest, body)
@@ -236,6 +238,16 @@ export function install(prefix = resolvePrefix(), pkgRoot = PKG_ROOT) {
   copy(path.join(pkgRoot, "ristretto", "version.js"), installedVersionJs)
   copy(path.join(pkgRoot, "ristretto", "plugin.json"), path.join(prefix, "ristretto", "plugin.json"))
   copy(path.join(pkgRoot, "ristretto", "format-migration.md"), path.join(prefix, "ristretto", "format-migration.md"))
+
+  // briefs/ and reference/ — 0.17 moved the shared rules out of commands/ into
+  // these dirs; the commands staged into skills/ point at them, so a 0.17
+  // install without them hands subagents dead paths.
+  for (const dir of ["briefs", "reference"]) {
+    const srcDir = path.join(pkgRoot, "ristretto", dir)
+    for (const f of readdirSync(srcDir).filter((f) => f.endsWith(".md"))) {
+      copy(path.join(srcDir, f), path.join(prefix, "ristretto", dir, f))
+    }
+  }
 
   // Commands land at <prefix>/ristretto/skills/ristretto-<name>.md — invisible to
   // OpenCode's {command,commands}/**/*.md auto-discovery glob, so co-installed

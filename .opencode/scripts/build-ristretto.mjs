@@ -42,6 +42,17 @@ for (const f of readdirSync(commandsSrc).filter((f) => f.endsWith(".md"))) {
 for (const name of ["gate.js", "testreport.js", "junit.js", "baseline.js", "version.js"]) {
   copyFileSync(path.join(PKG_ROOT, "scripts", name), path.join(STAGE, name))
 }
+// briefs/*.md → ristretto/briefs/ and reference/*.md → ristretto/reference/.
+// 0.17 moved shared rules out of commands/ into these dirs; commands now say
+// "Read ${CLAUDE_PLUGIN_ROOT}/briefs/…" and the installed layout must answer.
+for (const [srcDir, destDir] of [["briefs", "briefs"], ["reference", "reference"]]) {
+  const src = path.join(PKG_ROOT, srcDir)
+  const dest = path.join(STAGE, destDir)
+  mkdirSync(dest, { recursive: true })
+  for (const f of readdirSync(src).filter((f) => f.endsWith(".md"))) {
+    copyFileSync(path.join(src, f), path.join(dest, f))
+  }
+}
 // gate-lsp.mjs is OpenCode-only — lives beside this script, not under scripts/.
 copyFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "gate-lsp.mjs"), path.join(STAGE, "gate-lsp.mjs"))
 

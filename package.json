@@ -1,6 +1,6 @@
 {
   "name": "ristretto",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "main": "./.opencode/plugins/ristretto.mjs",
   "bin": {
     "ristretto": "bin/install.mjs"

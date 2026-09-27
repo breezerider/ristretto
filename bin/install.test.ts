@@ -36,7 +36,7 @@ test("migrate is a no-op when <prefix>/ristretto/plugin.json is absent (first in
 test("migrate is a no-op when plugin.json version is >= 0.16", () => {
   const prefix = mkdtempSync(path.join(tmpdir(), "ristretto-install-"))
   mkdirSync(path.join(prefix, "ristretto"), { recursive: true })
-  writeFileSync(path.join(prefix, "ristretto", "plugin.json"), JSON.stringify({ version: "0.16.0" }))
+  writeFileSync(path.join(prefix, "ristretto", "plugin.json"), JSON.stringify({ version: "0.17.0" }))
   mkdirSync(path.join(prefix, "commands"), { recursive: true })
   writeFileSync(path.join(prefix, "commands", "ristretto-help.md"), "stays")
   migrate(prefix)
@@ -65,9 +65,9 @@ test("install writes commands to <prefix>/ristretto/skills/, LSP to <prefix>/ris
   // LSP moves to <prefix>/ristretto/gate-lsp.mjs
   expect(existsSync(path.join(prefix, "ristretto", "gate-lsp.mjs"))).toBe(true)
   expect(existsSync(path.join(prefix, "scripts", "gate-lsp.mjs"))).toBe(false)
-  // plugin.json lands at <prefix>/ristretto/plugin.json carrying 0.16.0
+  // plugin.json lands at <prefix>/ristretto/plugin.json carrying 0.17.0
   const pluginJson = JSON.parse(readFileSync(path.join(prefix, "ristretto", "plugin.json"), "utf8"))
-  expect(pluginJson.version).toBe("0.16.0")
+  expect(pluginJson.version).toBe("0.17.0")
 })
 
 test("install runs migrate first: a pre-0.16 install's <prefix>/commands/ristretto-*.md get deleted before the new layout is written", () => {
@@ -99,16 +99,23 @@ test("installed commands carry no ${CLAUDE_PLUGIN_ROOT} residuals and no <prefix
   }
 })
 
-test("ristretto-pull's testreport.js reference resolves to a file that exists on disk", () => {
-  // The bug a future contributor would hit: a new scripts/*.js reference that
-  // doesn't have a per-file rewrite silently falls through to <prefix>/scripts/.
-  // pull.md references testreport.js for `--probe` — verify that path exists.
+test("every installed skill's ${CLAUDE_PLUGIN_ROOT} reference resolves to a file on disk", () => {
+  // The bug a future contributor would hit: a command referencing an asset the
+  // package doesn't ship — the path-baking writes a dead absolute path and the
+  // subagent reads nothing. 0.16's instance was pull.md's testreport.js --probe
+  // step; 0.17 dropped that step but added briefs/* and reference/config.md.
+  // So instead of matching one known string, extract every node "<path>" the
+  // installed bodies contain and check each one exists.
   const prefix = mkdtempSync(path.join(tmpdir(), "ristretto-install-"))
   install(prefix)
-  const pullBody = readFileSync(path.join(prefix, "ristretto", "skills", "ristretto-pull.md"), "utf8")
-  const m = pullBody.match(/node "([^"]*testreport\.js)" --probe/)
-  expect(m).not.toBeNull()
-  expect(existsSync(m![1])).toBe(true)
+  const skillsDir = path.join(prefix, "ristretto", "skills")
+  const bodies = readdirSync(skillsDir)
+    .filter((f) => f.endsWith(".md"))
+    .map((f) => readFileSync(path.join(skillsDir, f), "utf8"))
+  const refs = new Set<string>()
+  for (const b of bodies) for (const m of b.matchAll(/node "([^"]+\.(?:js|mjs))"/g)) refs.add(m[1])
+  expect(refs.size).toBeGreaterThan(0)
+  for (const ref of refs) expect(existsSync(ref)).toBe(true)
 })
 
 test("install runs when invoked via a symlink (npm/npx .bin/ristretto path)", () => {
@@ -146,19 +153,16 @@ test("install reads from <pkgRoot>/ristretto/ when pkgRoot contains only the shi
   const realRistretto = path.resolve("ristretto")
   const realPlugin = path.resolve(".opencode", "plugins", "ristretto.mjs")
 
-  // Mirror the npm tarball layout.
-  mkdirSync(path.join(pkgRoot, "ristretto", "skills"), { recursive: true })
-  for (const f of readdirSync(realRistretto)) {
-    const src = path.join(realRistretto, f)
-    const dest = path.join(pkgRoot, "ristretto", f)
-    if (f === "skills") {
-      for (const g of readdirSync(src)) {
-        copyFileSync(path.join(src, g), path.join(dest, g))
-      }
-    } else {
-      copyFileSync(src, dest)
+  // Mirror the npm tarball layout. ristretto/ contains subdirs (skills/, briefs/,
+  // reference/) since the 0.17 staging, so the copy is recursive.
+  const mirror = (src: string, dest: string) => {
+    mkdirSync(dest, { recursive: true })
+    for (const f of readdirSync(src, { withFileTypes: true })) {
+      if (f.isDirectory()) mirror(path.join(src, f.name), path.join(dest, f.name))
+      else copyFileSync(path.join(src, f.name), path.join(dest, f.name))
     }
   }
+  mirror(realRistretto, path.join(pkgRoot, "ristretto"))
   mkdirSync(path.join(pkgRoot, ".opencode", "plugins"), { recursive: true })
   copyFileSync(realPlugin, path.join(pkgRoot, ".opencode", "plugins", "ristretto.mjs"))
 
@@ -204,5 +208,10 @@ test("install reads from <pkgRoot>/ristretto/ when pkgRoot contains only the shi
   ]) {
     expect(existsSync(path.join(prefix, "ristretto", f))).toBe(true)
   }
+  // 0.17 layout: the shared-rule dirs the commands reference.
+  for (const f of ["common.md", "planner.md", "implementer.md", "reviewer.md", "closer.md"]) {
+    expect(existsSync(path.join(prefix, "ristretto", "briefs", f))).toBe(true)
+  }
+  expect(existsSync(path.join(prefix, "ristretto", "reference", "config.md"))).toBe(true)
   expect(existsSync(path.join(prefix, "plugins", "ristretto.mjs"))).toBe(true)
 })

@@ -28,8 +28,8 @@ test("README brew example shows [easy]", () => {
   expect(README).toMatch(/\/ristretto-brew \[easy\]/)
 })
 
-test("README pins @0.16.0", () => {
-  expect(README).toContain("@0.16.0")
+test("README pins @0.17.0", () => {
+  expect(README).toContain("@0.17.0")
   expect(README).not.toMatch(/@0\.(12|15)\.0/)
 })
 
