@@ -1,5 +1,6 @@
-// README.opencode.test.ts — README describes the 0.16 layout, hook table, brew
-// example, pin, and local-clone note. Run with: bun test README.opencode.test.ts
+// README.opencode.test.ts — README describes the source-layout tarball, the
+// installer-side adaptation, the hook table, brew example, and pin. Run with:
+// bun test .opencode/src/README.opencode.test.ts
 import { test, expect } from "bun:test"
 import { readFileSync } from "node:fs"
 import path from "node:path"
@@ -33,7 +34,12 @@ test("README pins @0.17.0", () => {
   expect(README).not.toMatch(/@0\.(12|15)\.0/)
 })
 
-test("README mentions local-clone requires bun run build", () => {
-  expect(README).toMatch(/local.?clone/i)
-  expect(README).toMatch(/bun run build/)
+test("README describes the source-layout ship and installer-side adaptation", () => {
+  expect(README).toMatch(/source layout/)
+  expect(README).toContain("commands/")
+  expect(README).toContain("scripts/")
+  expect(README).toContain(".claude-plugin/")
+  // The staged ristretto/ tree is gone as a concept — no staging prose survives.
+  expect(README).not.toMatch(/staged/i)
+  expect(README).not.toMatch(/bun run build.*stage|stage.*ristretto\//i)
 })

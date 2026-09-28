@@ -1,6 +1,6 @@
 // .opencode/src/index.ts
-import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync as readFileSync2 } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { appendFileSync, existsSync, mkdirSync, readFileSync as readFileSync2, statSync } from "node:fs";
 import path2 from "node:path";
 
 // node_modules/jsonc-parser/lib/esm/impl/scanner.js
@@ -334,123 +334,6 @@ function isLineBreak(ch) {
 function isDigit(ch) {
   return ch >= 48 && ch <= 57;
 }
-var CharacterCodes;
-(function(CharacterCodes2) {
-  CharacterCodes2[CharacterCodes2["lineFeed"] = 10] = "lineFeed";
-  CharacterCodes2[CharacterCodes2["carriageReturn"] = 13] = "carriageReturn";
-  CharacterCodes2[CharacterCodes2["space"] = 32] = "space";
-  CharacterCodes2[CharacterCodes2["_0"] = 48] = "_0";
-  CharacterCodes2[CharacterCodes2["_1"] = 49] = "_1";
-  CharacterCodes2[CharacterCodes2["_2"] = 50] = "_2";
-  CharacterCodes2[CharacterCodes2["_3"] = 51] = "_3";
-  CharacterCodes2[CharacterCodes2["_4"] = 52] = "_4";
-  CharacterCodes2[CharacterCodes2["_5"] = 53] = "_5";
-  CharacterCodes2[CharacterCodes2["_6"] = 54] = "_6";
-  CharacterCodes2[CharacterCodes2["_7"] = 55] = "_7";
-  CharacterCodes2[CharacterCodes2["_8"] = 56] = "_8";
-  CharacterCodes2[CharacterCodes2["_9"] = 57] = "_9";
-  CharacterCodes2[CharacterCodes2["a"] = 97] = "a";
-  CharacterCodes2[CharacterCodes2["b"] = 98] = "b";
-  CharacterCodes2[CharacterCodes2["c"] = 99] = "c";
-  CharacterCodes2[CharacterCodes2["d"] = 100] = "d";
-  CharacterCodes2[CharacterCodes2["e"] = 101] = "e";
-  CharacterCodes2[CharacterCodes2["f"] = 102] = "f";
-  CharacterCodes2[CharacterCodes2["g"] = 103] = "g";
-  CharacterCodes2[CharacterCodes2["h"] = 104] = "h";
-  CharacterCodes2[CharacterCodes2["i"] = 105] = "i";
-  CharacterCodes2[CharacterCodes2["j"] = 106] = "j";
-  CharacterCodes2[CharacterCodes2["k"] = 107] = "k";
-  CharacterCodes2[CharacterCodes2["l"] = 108] = "l";
-  CharacterCodes2[CharacterCodes2["m"] = 109] = "m";
-  CharacterCodes2[CharacterCodes2["n"] = 110] = "n";
-  CharacterCodes2[CharacterCodes2["o"] = 111] = "o";
-  CharacterCodes2[CharacterCodes2["p"] = 112] = "p";
-  CharacterCodes2[CharacterCodes2["q"] = 113] = "q";
-  CharacterCodes2[CharacterCodes2["r"] = 114] = "r";
-  CharacterCodes2[CharacterCodes2["s"] = 115] = "s";
-  CharacterCodes2[CharacterCodes2["t"] = 116] = "t";
-  CharacterCodes2[CharacterCodes2["u"] = 117] = "u";
-  CharacterCodes2[CharacterCodes2["v"] = 118] = "v";
-  CharacterCodes2[CharacterCodes2["w"] = 119] = "w";
-  CharacterCodes2[CharacterCodes2["x"] = 120] = "x";
-  CharacterCodes2[CharacterCodes2["y"] = 121] = "y";
-  CharacterCodes2[CharacterCodes2["z"] = 122] = "z";
-  CharacterCodes2[CharacterCodes2["A"] = 65] = "A";
-  CharacterCodes2[CharacterCodes2["B"] = 66] = "B";
-  CharacterCodes2[CharacterCodes2["C"] = 67] = "C";
-  CharacterCodes2[CharacterCodes2["D"] = 68] = "D";
-  CharacterCodes2[CharacterCodes2["E"] = 69] = "E";
-  CharacterCodes2[CharacterCodes2["F"] = 70] = "F";
-  CharacterCodes2[CharacterCodes2["G"] = 71] = "G";
-  CharacterCodes2[CharacterCodes2["H"] = 72] = "H";
-  CharacterCodes2[CharacterCodes2["I"] = 73] = "I";
-  CharacterCodes2[CharacterCodes2["J"] = 74] = "J";
-  CharacterCodes2[CharacterCodes2["K"] = 75] = "K";
-  CharacterCodes2[CharacterCodes2["L"] = 76] = "L";
-  CharacterCodes2[CharacterCodes2["M"] = 77] = "M";
-  CharacterCodes2[CharacterCodes2["N"] = 78] = "N";
-  CharacterCodes2[CharacterCodes2["O"] = 79] = "O";
-  CharacterCodes2[CharacterCodes2["P"] = 80] = "P";
-  CharacterCodes2[CharacterCodes2["Q"] = 81] = "Q";
-  CharacterCodes2[CharacterCodes2["R"] = 82] = "R";
-  CharacterCodes2[CharacterCodes2["S"] = 83] = "S";
-  CharacterCodes2[CharacterCodes2["T"] = 84] = "T";
-  CharacterCodes2[CharacterCodes2["U"] = 85] = "U";
-  CharacterCodes2[CharacterCodes2["V"] = 86] = "V";
-  CharacterCodes2[CharacterCodes2["W"] = 87] = "W";
-  CharacterCodes2[CharacterCodes2["X"] = 88] = "X";
-  CharacterCodes2[CharacterCodes2["Y"] = 89] = "Y";
-  CharacterCodes2[CharacterCodes2["Z"] = 90] = "Z";
-  CharacterCodes2[CharacterCodes2["asterisk"] = 42] = "asterisk";
-  CharacterCodes2[CharacterCodes2["backslash"] = 92] = "backslash";
-  CharacterCodes2[CharacterCodes2["closeBrace"] = 125] = "closeBrace";
-  CharacterCodes2[CharacterCodes2["closeBracket"] = 93] = "closeBracket";
-  CharacterCodes2[CharacterCodes2["colon"] = 58] = "colon";
-  CharacterCodes2[CharacterCodes2["comma"] = 44] = "comma";
-  CharacterCodes2[CharacterCodes2["dot"] = 46] = "dot";
-  CharacterCodes2[CharacterCodes2["doubleQuote"] = 34] = "doubleQuote";
-  CharacterCodes2[CharacterCodes2["minus"] = 45] = "minus";
-  CharacterCodes2[CharacterCodes2["openBrace"] = 123] = "openBrace";
-  CharacterCodes2[CharacterCodes2["openBracket"] = 91] = "openBracket";
-  CharacterCodes2[CharacterCodes2["plus"] = 43] = "plus";
-  CharacterCodes2[CharacterCodes2["slash"] = 47] = "slash";
-  CharacterCodes2[CharacterCodes2["formFeed"] = 12] = "formFeed";
-  CharacterCodes2[CharacterCodes2["tab"] = 9] = "tab";
-})(CharacterCodes || (CharacterCodes = {}));
-
-// node_modules/jsonc-parser/lib/esm/impl/string-intern.js
-var cachedSpaces = new Array(20).fill(0).map((_, index) => {
-  return " ".repeat(index);
-});
-var maxCachedValues = 200;
-var cachedBreakLinesWithSpaces = {
-  " ": {
-    "\n": new Array(maxCachedValues).fill(0).map((_, index) => {
-      return `
-` + " ".repeat(index);
-    }),
-    "\r": new Array(maxCachedValues).fill(0).map((_, index) => {
-      return "\r" + " ".repeat(index);
-    }),
-    "\r\n": new Array(maxCachedValues).fill(0).map((_, index) => {
-      return `\r
-` + " ".repeat(index);
-    })
-  },
-  "\t": {
-    "\n": new Array(maxCachedValues).fill(0).map((_, index) => {
-      return `
-` + "\t".repeat(index);
-    }),
-    "\r": new Array(maxCachedValues).fill(0).map((_, index) => {
-      return "\r" + "\t".repeat(index);
-    }),
-    "\r\n": new Array(maxCachedValues).fill(0).map((_, index) => {
-      return `\r
-` + "\t".repeat(index);
-    })
-  }
-};
 
 // node_modules/jsonc-parser/lib/esm/impl/parser.js
 var ParseOptions;
@@ -755,66 +638,27 @@ function visit(text, visitor, options = ParseOptions.DEFAULT) {
   return true;
 }
 
-// node_modules/jsonc-parser/lib/esm/main.js
-var ScanError;
-(function(ScanError2) {
-  ScanError2[ScanError2["None"] = 0] = "None";
-  ScanError2[ScanError2["UnexpectedEndOfComment"] = 1] = "UnexpectedEndOfComment";
-  ScanError2[ScanError2["UnexpectedEndOfString"] = 2] = "UnexpectedEndOfString";
-  ScanError2[ScanError2["UnexpectedEndOfNumber"] = 3] = "UnexpectedEndOfNumber";
-  ScanError2[ScanError2["InvalidUnicode"] = 4] = "InvalidUnicode";
-  ScanError2[ScanError2["InvalidEscapeCharacter"] = 5] = "InvalidEscapeCharacter";
-  ScanError2[ScanError2["InvalidCharacter"] = 6] = "InvalidCharacter";
-})(ScanError || (ScanError = {}));
-var SyntaxKind;
-(function(SyntaxKind2) {
-  SyntaxKind2[SyntaxKind2["OpenBraceToken"] = 1] = "OpenBraceToken";
-  SyntaxKind2[SyntaxKind2["CloseBraceToken"] = 2] = "CloseBraceToken";
-  SyntaxKind2[SyntaxKind2["OpenBracketToken"] = 3] = "OpenBracketToken";
-  SyntaxKind2[SyntaxKind2["CloseBracketToken"] = 4] = "CloseBracketToken";
-  SyntaxKind2[SyntaxKind2["CommaToken"] = 5] = "CommaToken";
-  SyntaxKind2[SyntaxKind2["ColonToken"] = 6] = "ColonToken";
-  SyntaxKind2[SyntaxKind2["NullKeyword"] = 7] = "NullKeyword";
-  SyntaxKind2[SyntaxKind2["TrueKeyword"] = 8] = "TrueKeyword";
-  SyntaxKind2[SyntaxKind2["FalseKeyword"] = 9] = "FalseKeyword";
-  SyntaxKind2[SyntaxKind2["StringLiteral"] = 10] = "StringLiteral";
-  SyntaxKind2[SyntaxKind2["NumericLiteral"] = 11] = "NumericLiteral";
-  SyntaxKind2[SyntaxKind2["LineCommentTrivia"] = 12] = "LineCommentTrivia";
-  SyntaxKind2[SyntaxKind2["BlockCommentTrivia"] = 13] = "BlockCommentTrivia";
-  SyntaxKind2[SyntaxKind2["LineBreakTrivia"] = 14] = "LineBreakTrivia";
-  SyntaxKind2[SyntaxKind2["Trivia"] = 15] = "Trivia";
-  SyntaxKind2[SyntaxKind2["Unknown"] = 16] = "Unknown";
-  SyntaxKind2[SyntaxKind2["EOF"] = 17] = "EOF";
-})(SyntaxKind || (SyntaxKind = {}));
-var parse2 = parse;
-var ParseErrorCode;
-(function(ParseErrorCode2) {
-  ParseErrorCode2[ParseErrorCode2["InvalidSymbol"] = 1] = "InvalidSymbol";
-  ParseErrorCode2[ParseErrorCode2["InvalidNumberFormat"] = 2] = "InvalidNumberFormat";
-  ParseErrorCode2[ParseErrorCode2["PropertyNameExpected"] = 3] = "PropertyNameExpected";
-  ParseErrorCode2[ParseErrorCode2["ValueExpected"] = 4] = "ValueExpected";
-  ParseErrorCode2[ParseErrorCode2["ColonExpected"] = 5] = "ColonExpected";
-  ParseErrorCode2[ParseErrorCode2["CommaExpected"] = 6] = "CommaExpected";
-  ParseErrorCode2[ParseErrorCode2["CloseBraceExpected"] = 7] = "CloseBraceExpected";
-  ParseErrorCode2[ParseErrorCode2["CloseBracketExpected"] = 8] = "CloseBracketExpected";
-  ParseErrorCode2[ParseErrorCode2["EndOfFileExpected"] = 9] = "EndOfFileExpected";
-  ParseErrorCode2[ParseErrorCode2["InvalidCommentToken"] = 10] = "InvalidCommentToken";
-  ParseErrorCode2[ParseErrorCode2["UnexpectedEndOfComment"] = 11] = "UnexpectedEndOfComment";
-  ParseErrorCode2[ParseErrorCode2["UnexpectedEndOfString"] = 12] = "UnexpectedEndOfString";
-  ParseErrorCode2[ParseErrorCode2["UnexpectedEndOfNumber"] = 13] = "UnexpectedEndOfNumber";
-  ParseErrorCode2[ParseErrorCode2["InvalidUnicode"] = 14] = "InvalidUnicode";
-  ParseErrorCode2[ParseErrorCode2["InvalidEscapeCharacter"] = 15] = "InvalidEscapeCharacter";
-  ParseErrorCode2[ParseErrorCode2["InvalidCharacter"] = 16] = "InvalidCharacter";
-})(ParseErrorCode || (ParseErrorCode = {}));
-
 // .opencode/src/commands.ts
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+
+// .opencode/lib/rewrite-namespace.mjs
 var NAMESPACE_RE = /\/ristretto:([a-zA-Z0-9-]+)/g;
+function rewriteNamespace(body) {
+  return body.replace(NAMESPACE_RE, "/ristretto-$1");
+}
+
+// .opencode/src/commands.ts
 var DEFAULT_DESCRIPTION = "ristretto command";
 function loadCommands(dir) {
   const out = [];
-  for (const file of readdirSync(dir).sort()) {
+  let files;
+  try {
+    files = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  for (const file of files.sort()) {
     if (!file.startsWith("ristretto-") || !file.endsWith(".md"))
       continue;
     const name = file.slice(0, -3);
@@ -823,24 +667,29 @@ function loadCommands(dir) {
     out.push({
       key: name,
       description: description || DEFAULT_DESCRIPTION,
-      template: body.replace(NAMESPACE_RE, "/ristretto-$1")
+      template: rewriteNamespace(body)
     });
   }
   return out;
 }
 function parseFrontmatter(raw) {
-  if (!raw.startsWith(`---
-`))
+  const open = /^---\r?\n/.exec(raw);
+  if (!open)
     return { body: raw };
-  const end = raw.indexOf(`
----
-`, 4);
-  if (end === -1)
+  const closeAt = raw.indexOf(`
+---`, open[0].length);
+  if (closeAt === -1)
     return { body: raw };
-  const fm = raw.slice(4, end);
-  const body = raw.slice(end + 5);
-  const descM = fm.match(/^description:\s*(.+)$/m);
-  const hintM = fm.match(/^argument-hint:\s*(.+)$/m);
+  const after = raw.slice(closeAt + 4, closeAt + 6);
+  const eolLen = after.startsWith(`\r
+`) ? 2 : after.startsWith(`
+`) ? 1 : -1;
+  if (eolLen === -1)
+    return { body: raw };
+  const fm = raw.slice(open[0].length, closeAt + 1);
+  const body = raw.slice(closeAt + 4 + eolLen);
+  const descM = fm.match(/^description:\s*(.+?)\s*$/m);
+  const hintM = fm.match(/^argument-hint:\s*(.+?)\s*$/m);
   const description = descM ? descM[1].trim() : undefined;
   const hint = hintM ? hintM[1].trim() : undefined;
   let folded;
@@ -854,35 +703,46 @@ function parseFrontmatter(raw) {
 }
 
 // .opencode/src/index.ts
-var PLUGIN_ROOT = (() => {
-  let dir = import.meta.dir;
-  while (dir && dir !== path2.dirname(dir)) {
-    if (existsSync(path2.join(dir, "ristretto", "gate.js")))
-      return dir;
-    dir = path2.dirname(dir);
-  }
-  return path2.join(import.meta.dir, "..", "..");
-})();
-var COMMANDS_DIR = path2.join(PLUGIN_ROOT, "ristretto", "skills");
-var GATE_JS = path2.join(PLUGIN_ROOT, "ristretto", "gate.js");
+var PLUGIN_ROOT = path2.dirname(import.meta.dir);
+var RISTRETTO_DIR = path2.join(PLUGIN_ROOT, "ristretto");
+var COMMANDS_DIR = path2.join(RISTRETTO_DIR, "skills");
+var GATE_JS = path2.join(RISTRETTO_DIR, "gate.js");
+var REQUIRED_INSTALL = ["gate.js", "testreport.js", "junit.js", "baseline.js", "version.js", "skills"];
+var gateProbed = false;
+var gateAvailable = false;
+function probeInstall() {
+  return REQUIRED_INSTALL.map((name) => path2.join(RISTRETTO_DIR, name)).filter((p) => !existsSync(p));
+}
 function configFile() {
   const dir = process.env.RISTRETTO_CONFIG || PLUGIN_ROOT;
   return path2.join(dir, "ristretto.jsonc");
 }
+var cfgCache = null;
 function loadConfig() {
+  const file = configFile();
   try {
-    const file = configFile();
-    if (!existsSync(file))
+    let st;
+    try {
+      st = statSync(file);
+    } catch {
+      cfgCache = null;
       return {};
-    const val = parse2(readFileSync2(file, "utf8"));
+    }
+    const key = `${file}:${st.mtimeMs}:${st.size}`;
+    if (cfgCache && cfgCache.key === key)
+      return cfgCache.cfg;
+    let cfg = {};
+    const val = parse(readFileSync2(file, "utf8"));
     if (val && typeof val === "object" && !Array.isArray(val))
-      return val;
-  } catch {}
-  return {};
+      cfg = val;
+    cfgCache = { key, cfg };
+    return cfg;
+  } catch {
+    return {};
+  }
 }
 function debugLog(msg) {
-  const cfg = loadConfig();
-  const logPath = cfg.debug?.logPath;
+  const logPath = loadConfig().debug?.logPath;
   if (!logPath)
     return;
   try {
@@ -891,17 +751,34 @@ function debugLog(msg) {
 `);
   } catch {}
 }
-var GATE_TIMEOUT_MS = 30000;
+var DEFAULT_GATE_TIMEOUT_MS = 660000;
+var killTree = (child) => {
+  if (process.platform === "win32") {
+    try {
+      spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+    } catch {}
+    return;
+  }
+  try {
+    process.kill(-(child.pid ?? 0), "SIGKILL");
+  } catch {
+    try {
+      child.kill("SIGKILL");
+    } catch {}
+  }
+};
 function runGate(projectDir, mode, opts = {}) {
   const argv = [GATE_JS, mode, ...opts.arg ? [opts.arg] : []];
-  const cfgNode = loadConfig().nodejsPath;
+  const cfg = loadConfig();
+  const cfgNode = cfg.nodejsPath;
   const interpreter = typeof cfgNode === "string" && cfgNode ? cfgNode : "node";
+  const timeoutMs = typeof cfg.gateTimeoutMs === "number" && cfg.gateTimeoutMs > 0 ? cfg.gateTimeoutMs : DEFAULT_GATE_TIMEOUT_MS;
   debugLog(`runGate spawn: ${interpreter} ${argv.join(" ")} (cwd ${projectDir})`);
   return new Promise((resolve) => {
     const child = spawn(interpreter, argv, {
       env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
       stdio: ["pipe", "pipe", "pipe"],
-      detached: !!opts.fireAndForget
+      detached: true
     });
     const hook = opts.touchedFile ? JSON.stringify({ tool_input: { file_path: opts.touchedFile } }) : "{}";
     child.stdin.end(hook);
@@ -913,14 +790,12 @@ function runGate(projectDir, mode, opts = {}) {
       output += d;
     });
     const timer = setTimeout(() => {
-      try {
-        child.kill();
-      } catch {}
+      killTree(child);
       if (!opts.fireAndForget) {
-        console.error("[ristretto] gate timed out after " + GATE_TIMEOUT_MS + "ms");
+        console.error("[ristretto] gate timed out after " + timeoutMs + "ms — UNVERIFIED, not red");
       }
-      resolve({ code: 2, output });
-    }, GATE_TIMEOUT_MS);
+      resolve({ code: 2, output, timedOut: true });
+    }, timeoutMs);
     child.on("error", () => {
       clearTimeout(timer);
       resolve({ code: 2, output });
@@ -940,20 +815,21 @@ function runGate(projectDir, mode, opts = {}) {
   });
 }
 var MAX_REPROMPTS = 3;
-var advancing = false;
+var prompting = false;
 var retries = new Map;
 var IDLE_PROMPT = "ristretto: deterministic gates are red. Fix the failures before stopping. Do NOT weaken, skip, or delete gates/tests to get green.";
 async function onSessionIdle(client, projectDir, sessionID) {
-  if (advancing)
-    return;
-  advancing = true;
-  try {
-    const { code } = await runGate(projectDir, "full", { fireAndForget: true });
-    debugLog(`session.idle gate → exit ${code}`);
-    if (code !== 2) {
+  const { code, timedOut } = await runGate(projectDir, "full", { fireAndForget: true });
+  debugLog(`session.idle gate → exit ${code}${timedOut ? " (timed out — UNVERIFIED)" : ""}`);
+  if (code !== 2 || timedOut) {
+    if (!timedOut)
       retries.delete(sessionID);
-      return;
-    }
+    return;
+  }
+  if (prompting)
+    return;
+  prompting = true;
+  try {
     const n = (retries.get(sessionID) || 0) + 1;
     if (n > MAX_REPROMPTS) {
       retries.delete(sessionID);
@@ -972,11 +848,19 @@ ${IDLE_PROMPT}`);
       }
     });
   } catch {} finally {
-    advancing = false;
+    prompting = false;
   }
 }
 var RistrettoPlugin = async ({ directory, worktree, client }) => {
   const projectDir = worktree || directory;
+  if (!gateProbed) {
+    gateProbed = true;
+    const missing = probeInstall();
+    gateAvailable = missing.length === 0;
+    if (!gateAvailable) {
+      console.error(`ristretto: incomplete install — missing ${missing.join(", ")} — this plugin must be installed with 'npx ristretto --opencode'. Hooks disabled.`);
+    }
+  }
   return {
     config: async (config) => {
       config.command = config.command || {};
@@ -985,6 +869,8 @@ var RistrettoPlugin = async ({ directory, worktree, client }) => {
       }
     },
     "tool.execute.before": async (input, output) => {
+      if (!gateAvailable)
+        return;
       if (input.tool !== "write" && input.tool !== "edit")
         return;
       const filePath = output.args?.filePath;
@@ -1000,6 +886,8 @@ ${err.message}`);
       }
     },
     "tool.execute.after": async (input) => {
+      if (!gateAvailable)
+        return;
       if (input.tool === "task") {
         const { code, output } = await runGate(projectDir, "full", { arg: "subagent", captureOutput: false });
         debugLog(`tool.execute.after task gate → exit ${code}${output.trim() ? `:
@@ -1014,6 +902,8 @@ ${err.message}`);
       }
     },
     event: async ({ event }) => {
+      if (!gateAvailable)
+        return;
       if (event.type === "session.idle") {
         await onSessionIdle(client, projectDir, event.properties.sessionID);
       }

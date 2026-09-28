@@ -1,28 +1,20 @@
 # ristretto — OpenCode
 
-Native TypeScript plugin (`.opencode/plugin/index.ts`), compiled to a pre-built ES
+Native TypeScript plugin (`.opencode/src/index.ts`), compiled to a pre-built ES
 module (`.opencode/plugins/ristretto.mjs`) that ships in the npm package. Commands and
 the gate runner are shared with the Claude Code plugin — single source of truth.
 
 ## Install
 
-Three ways, all loading the same compiled plugin (`.opencode/plugins/ristretto.mjs`).
-
-**From a local clone** — the plugin directory must be on disk so `ctx` resolves it:
+The npm package ships the verbatim **source layout** — `commands/`, `scripts/`,
+`briefs/`, `reference/`, `docs/`, `.claude-plugin/`, `.opencode/`, `bin/` — the same
+bytes the Claude Code plugin consumes. The OpenCode installer performs every
+OpenCode-specific adaptation: the `ristretto-` command-prefix rename, the
+`/ristretto:` → `/ristretto-` namespace rewrite, `${CLAUDE_PLUGIN_ROOT}` baking to
+absolute installed paths, the version.js layout patch, and the manifest relocation.
 
 ```json
 // opencode.json
-{ "plugin": ["./path/to/ristretto"] }
-```
-
-After cloning, run `bun run build` to stage `ristretto/` in-repo; the plugin's
-`PLUGIN_ROOT` walk needs `ristretto/gate.js` to be present, and only the build
-step creates it. Without `bun run build`, the local-clone install does not resolve.
-
-**From npm** — the package ships the compiled `.mjs` and the staged `ristretto/`
-tree (skills, gate runner, LSP server, manifest):
-
-```json
 { "plugin": ["ristretto@0.17.0"] }
 ```
 
@@ -30,14 +22,21 @@ tree (skills, gate runner, LSP server, manifest):
 dir and registers it (idempotent):
 
 ```bash
-npx ristretto --opencode
+npx ristretto --opencode            # default: this repo's .opencode/
+npx ristretto --opencode --global   # shared config dir (~/.config/opencode), -g works
+npx ristretto --opencode --local    # redundant alias for the default
 ```
 
-Installs to the global config dir (`~/.config/opencode`), or `--local` for the project
-(`.opencode/`), or `--global` to force global. The installer registers the plugin in
-`opencode.jsonc` (preferred by OpenCode; falls back to `opencode.json`, creating it if
-neither exists). `opencode.jsonc` is edited structurally with `jsonc-parser`, so
-comments and formatting are preserved. Layout written:
+The default flipped to **repo-local** (`<cwd>/.opencode/`): per-repo tooling lives
+with the repo by default, and a shared-config install across projects is an
+explicit `--global`/`-g`. Behavior change from 0.x, where the installer silently
+preferred an existing global config — flagless runs now always target the repo,
+and the printed `Installing ristretto into <prefix>` line names the resolved
+prefix either way. `OPENCODE_CONFIG_DIR=<dir>` pins the local target (overrides
+`<cwd>/.opencode`, itself overridden by `--global`). The installer registers the
+plugin in `opencode.jsonc` (preferred by OpenCode; falls back to `opencode.json`,
+creating it if neither exists). `opencode.jsonc` is edited structurally with
+`jsonc-parser`, so comments and formatting are preserved. Layout written:
 
 ```
 <prefix>/plugins/ristretto.mjs             # the plugin
@@ -52,8 +51,9 @@ Installed command files are prefixed `ristretto-<name>.md` and their bodies have
 skips the prefix when already present and the rewrite is idempotent, so installed files
 load as-is.
 
-The plugin resolves its root from its own file, so it finds `ristretto/skills/` and
-`ristretto/gate.js` in either the npm layout or the npx-installed layout.
+The plugin resolves its root from its own file's installed geometry, so it finds
+`ristretto/skills/` and `ristretto/gate.js` under the install prefix. The plugin
+bundle rebuilds via `bun run build`.
 
 Restart OpenCode, then confirm the menu with `/ristretto-help`.
 
@@ -67,21 +67,21 @@ fresh — no committed-drift risk.
 installer runs via `npx`; it ships in the published package's dependency graph.
 
 ```bash
-# build the plugin artifact + stage ristretto/
+# rebuild the plugin bundle
 bun run build
 
 # gate runner self-check (plain Node)
 node scripts/gate.test.js
 
 # OpenCode adapter, install, package, and README tests (Bun)
-bun test .opencode/plugin/adapter.test.ts bin/install.test.ts package.test.ts README.opencode.test.ts
+bun test .opencode/src/adapter.test.ts bin/install.test.ts .opencode/src/package.test.ts .opencode/src/README.opencode.test.ts
 
 # or all of the above at once
 npm test
 
-# confirm exactly what ships — .opencode/plugins/ristretto.mjs, bin/install.mjs,
-# ristretto/ (skills, gate runner, LSP server, manifest) — and that tests + .claude-plugin/
-# are excluded
+# confirm exactly what ships — the SOURCE layout: commands/ (unprefixed), scripts/,
+# briefs/, reference/, docs/, .claude-plugin/, .opencode/, bin/install.mjs — and that
+# tests, fixtures, and docs/ristretto/ are excluded
 npm pack --dry-run
 
 # publish (prepack rebuilds the artifact first)

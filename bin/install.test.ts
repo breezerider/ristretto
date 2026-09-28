@@ -1,15 +1,173 @@
-// bin/install.test.ts — exercise the version-gated migration, the clean step, and
-// the install path. Run with: bun test bin/install.test.ts
+// bin/install.test.ts — installer against the SOURCE-layout pkgRoot. Run with:
+// bun test bin/install.test.ts
 //
 // Each test uses a throwaway tmpdir as the install prefix — no shared filesystem
 // state, no cleanup. `install(prefix)` is called with the tmpdir explicitly so the
 // default `resolvePrefix()` (which reads ~/.config/opencode) never runs.
+//
+// Flag-resolution tests (default local / --global / -g / --local / env scoping) are
+// subprocess spawns of bin/install.mjs: resolvePrefix() reads process.argv, which an
+// in-process call can't set, and each test asserts the filesystem outcome after the
+// run, not just the exit code. Env is pinned (XDG_CONFIG_HOME, HOME,
+// OPENCODE_CONFIG_DIR) so the host's real global config can't leak into assertions.
+//
+// opencode-source-layout-packaging: the pkgRoot mirror is SOURCE layout — commands/,
+// scripts/, briefs/, reference/, docs/, .claude-plugin/, .opencode/ — and ristretto/
+// is never created in it (the staged tree is gone as a concept). The installer maps
+// source→installed and is the only site of OpenCode adaptation.
 import { test, expect } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, copyFileSync, symlinkSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, copyFileSync, cpSync, symlinkSync } from "node:fs"
+import { createHash } from "node:crypto"
 import { spawnSync } from "node:child_process"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { cleanDir, install, migrate } from "./install.mjs"
+
+const INSTALL = path.resolve("bin", "install.mjs")
+const REPO = process.cwd()
+
+// The mirror inverts: pkgRoot mirrors SOURCE layout only. ristretto/ is never created
+// in the mirror — the old staged tree is gone as a concept.
+function createSourceMirror(pkgRoot: string) {
+  mkdirSync(pkgRoot, { recursive: true })
+  cpSync(path.resolve(REPO, "commands"), path.join(pkgRoot, "commands"), { recursive: true })
+  mkdirSync(path.join(pkgRoot, "scripts"), { recursive: true })
+  for (const name of ["gate.js", "testreport.js", "junit.js", "baseline.js", "version.js"]) {
+    copyFileSync(path.resolve(REPO, "scripts", name), path.join(pkgRoot, "scripts", name))
+  }
+  cpSync(path.resolve(REPO, ".opencode", "scripts", "gate-lsp.mjs"), path.join(pkgRoot, ".opencode", "scripts", "gate-lsp.mjs"))
+  cpSync(path.resolve(REPO, ".opencode", "lib", "rewrite-namespace.mjs"), path.join(pkgRoot, ".opencode", "lib", "rewrite-namespace.mjs"))
+  cpSync(path.resolve(REPO, ".opencode", "plugins", "ristretto.mjs"), path.join(pkgRoot, ".opencode", "plugins", "ristretto.mjs"))
+  cpSync(path.resolve(REPO, "briefs"), path.join(pkgRoot, "briefs"), { recursive: true })
+  cpSync(path.resolve(REPO, "reference"), path.join(pkgRoot, "reference"), { recursive: true })
+  cpSync(path.resolve(REPO, ".claude-plugin"), path.join(pkgRoot, ".claude-plugin"), { recursive: true })
+  mkdirSync(path.join(pkgRoot, "docs"), { recursive: true })
+  copyFileSync(path.resolve(REPO, "docs", "format-migration.md"), path.join(pkgRoot, "docs", "format-migration.md"))
+  // Sanity: no staged tree anywhere.
+  expect(existsSync(path.join(pkgRoot, "ristretto"))).toBe(false)
+}
+
+// Spawn the installer in a pinned sandbox: cwd = <cwdDir>, HOME = a throwaway dir,
+// XDG_CONFIG_HOME = <xdgDir> (global target), OPENCODE_CONFIG_DIR passed only when
+// given. Scrubbed otherwise so a real environment can't steer resolution.
+function runInstall(cwdDir: string, opts: { xdg?: string; openCodeDir?: string; flags?: string[] } = {}) {
+  const env: Record<string, string> = {}
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v !== undefined) env[k] = v
+  }
+  delete env.OPENCODE_CONFIG_DIR
+  env.HOME = mkdtempSync(path.join(tmpdir(), "ristretto-home-"))
+  delete env.USERPROFILE
+  if (opts.xdg) env.XDG_CONFIG_HOME = opts.xdg
+  else delete env.XDG_CONFIG_HOME
+  if (opts.openCodeDir) env.OPENCODE_CONFIG_DIR = opts.openCodeDir
+  return spawnSync("node", [INSTALL, ...(opts.flags ?? [])], { cwd: cwdDir, env, encoding: "utf8" })
+}
+
+// The layout the contract spells: command prompts, gate runner, plugin.
+function expectFullLayout(prefix: string) {
+  const skillsDir = path.join(prefix, "ristretto", "skills")
+  const installed = readdirSync(skillsDir).filter((f) => f.startsWith("ristretto-") && f.endsWith(".md"))
+  expect(installed.length).toBe(8)
+  expect(existsSync(path.join(prefix, "ristretto", "gate.js"))).toBe(true)
+  expect(existsSync(path.join(prefix, "plugins", "ristretto.mjs"))).toBe(true)
+}
+
+test("spawn: no flags → cwd/.opencode gets the full layout (default is repo-local, no heuristic)", () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), "ristretto-cwd-"))
+  const result = runInstall(cwd)
+  expect(result.status).toBe(0)
+  expect(result.stderr).toBe("")
+  expectFullLayout(path.join(cwd, ".opencode"))
+  // stdout names the prefix it resolved — runtime evidence of which branch ran.
+  expect(result.stdout).toContain(`Installing ristretto into ${path.join(cwd, ".opencode")}`)
+})
+
+test("spawn: --global writes the XDG config dir, not cwd/.opencode (even with a local .opencode present)", () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), "ristretto-cwd-"))
+  const xdg = mkdtempSync(path.join(tmpdir(), "ristretto-xdg-"))
+  // A local .opencode already exists — --global must still opt up.
+  mkdirSync(path.join(cwd, ".opencode"), { recursive: true })
+  const result = runInstall(cwd, { xdg, flags: ["--global"] })
+  expect(result.status).toBe(0)
+  const prefix = path.join(xdg, "opencode")
+  expect(existsSync(path.join(prefix, "ristretto", "gate.js"))).toBe(true)
+  expect(existsSync(path.join(prefix, "plugins", "ristretto.mjs"))).toBe(true)
+  expect(existsSync(path.join(prefix, "ristretto", "skills", "ristretto-help.md"))).toBe(true)
+  // cwd stayed untouched.
+  expect(existsSync(path.join(cwd, ".opencode", "ristretto", "gate.js"))).toBe(false)
+})
+
+test("spawn: -g behaves identically to --global (both resolve to the XDG config dir)", () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), "ristretto-cwd-"))
+  const xdg = mkdtempSync(path.join(tmpdir(), "ristretto-xdg-"))
+  const result = runInstall(cwd, { xdg, flags: ["-g"] })
+  expect(result.status).toBe(0)
+  expect(result.stdout).toContain(`Installing ristretto into ${path.join(xdg, "opencode")}`)
+  expect(existsSync(path.join(xdg, "opencode", "ristretto", "gate.js"))).toBe(true)
+  expect(existsSync(path.join(xdg, "opencode", "plugins", "ristretto.mjs"))).toBe(true)
+  expect(existsSync(path.join(cwd, ".opencode"))).toBe(false)
+})
+
+test("spawn: --local still writes cwd/.opencode and stdout names the prefix used", () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), "ristretto-cwd-"))
+  const xdg = mkdtempSync(path.join(tmpdir(), "ristretto-xdg-"))
+  const result = runInstall(cwd, { xdg, flags: ["--local"] })
+  expect(result.status).toBe(0)
+  expect(result.stdout).toContain(`Installing ristretto into ${path.join(cwd, ".opencode")}`)
+  expectFullLayout(path.join(cwd, ".opencode"))
+  expect(existsSync(path.join(xdg, "opencode"))).toBe(false)
+})
+
+test("spawn: OPENCODE_CONFIG_DIR with no flags pins the local target (env scoping preserved)", () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), "ristretto-cwd-"))
+  const xdg = mkdtempSync(path.join(tmpdir(), "ristretto-xdg-"))
+  const pinned = mkdtempSync(path.join(tmpdir(), "ristretto-pin-"))
+  const result = runInstall(cwd, { xdg, openCodeDir: pinned })
+  expect(result.status).toBe(0)
+  expectFullLayout(pinned)
+  // cwd/.opencode NOT created — the env var replaced the cwd default too.
+  expect(existsSync(path.join(cwd, ".opencode"))).toBe(false)
+  // ...and the pinned prefix is what stdout names.
+  expect(result.stdout).toContain(`Installing ristretto into ${pinned}`)
+})
+
+test("spawn: --global beats OPENCODE_CONFIG_DIR (env override scopes to the local default only)", () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), "ristretto-cwd-"))
+  const xdg = mkdtempSync(path.join(tmpdir(), "ristretto-xdg-"))
+  const pinned = mkdtempSync(path.join(tmpdir(), "ristretto-pin-"))
+  const result = runInstall(cwd, { xdg, openCodeDir: pinned, flags: ["--global"] })
+  expect(result.status).toBe(0)
+  // Global branch won: XDG dir written, the env-pinned dir stays empty.
+  expect(existsSync(path.join(xdg, "opencode", "ristretto", "gate.js"))).toBe(true)
+  expect(result.stdout).toContain(`Installing ristretto into ${path.join(xdg, "opencode")}`)
+  // pinned is a mkdtemp dir (exists by construction) — what must be absent is any
+  // install content in it.
+  expect(existsSync(path.join(pinned, "ristretto"))).toBe(false)
+  expect(existsSync(path.join(pinned, "opencode.json"))).toBe(false)
+})
+
+test("spawn: pre-existing global config dir does NOT capture a flagless install (heuristic removed)", () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), "ristretto-cwd-"))
+  const xdg = mkdtempSync(path.join(tmpdir(), "ristretto-xdg-"))
+  // The old default was "global if it exists" — seed a global config and prove the
+  // flagless install lands locally instead.
+  mkdirSync(path.join(xdg, "opencode"), { recursive: true })
+  const result = runInstall(cwd, { xdg })
+  expect(result.status).toBe(0)
+  expect(existsSync(path.join(cwd, ".opencode", "ristretto", "gate.js"))).toBe(true)
+  expect(existsSync(path.join(xdg, "opencode", "ristretto"))).toBe(false)
+})
+
+test("spawn: --local --global together resolve to global (flag wins over alias)", () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), "ristretto-cwd-"))
+  const xdg = mkdtempSync(path.join(tmpdir(), "ristretto-xdg-"))
+  const result = runInstall(cwd, { xdg, flags: ["--local", "--global"] })
+  expect(result.status).toBe(0)
+  expect(result.stdout).toContain(`Installing ristretto into ${path.join(xdg, "opencode")}`)
+  expect(existsSync(path.join(xdg, "opencode", "ristretto", "gate.js"))).toBe(true)
+  expect(existsSync(path.join(cwd, ".opencode", "ristretto", "gate.js"))).toBe(false)
+})
 
 test("migrate deletes <prefix>/commands/ristretto-*.md when plugin.json version is < 0.16", () => {
   const prefix = mkdtempSync(path.join(tmpdir(), "ristretto-install-"))
@@ -118,6 +276,27 @@ test("every installed skill's ${CLAUDE_PLUGIN_ROOT} reference resolves to a file
   for (const ref of refs) expect(existsSync(ref)).toBe(true)
 })
 
+test("install names the configured nodejsPath in the LSP entry, not a hardcoded node", () => {
+  // The plugin honors ristretto.jsonc's nodejsPath for gate.js; an LSP registered with
+  // a hardcoded "node" would spawn a formatter server the rest of the install doesn't
+  // trust — one config key, two interpreters.
+  const prefix = mkdtempSync(path.join(tmpdir(), "ristretto-lsp-"))
+  const cfgDir = mkdtempSync(path.join(tmpdir(), "ristretto-lspcfg-"))
+  const nodeStub = path.join(cfgDir, "node-stub")
+  writeFileSync(nodeStub, "")
+  writeFileSync(path.join(cfgDir, "ristretto.jsonc"), JSON.stringify({ nodejsPath: nodeStub }))
+  // install() reads ristretto.jsonc at <prefix>/ristretto.jsonc — seed it there.
+  writeFileSync(path.join(prefix, "ristretto.jsonc"), JSON.stringify({ nodejsPath: nodeStub }))
+  install(prefix)
+  // Find which config file the LSP landed in.
+  const jsonc = path.join(prefix, "opencode.jsonc")
+  const json = path.join(prefix, "opencode.json")
+  const cfgFile = existsSync(jsonc) ? jsonc : json
+  const raw = readFileSync(cfgFile, "utf8")
+  expect(raw).toContain(nodeStub)
+  expect(raw).not.toMatch(/"command":\s*\[\s*"node"/)
+})
+
 test("install runs when invoked via a symlink (npm/npx .bin/ristretto path)", () => {
   // Bug 1 — isMain used path.resolve(process.argv[1]), which does NOT follow
   // symlinks. npm/npx invokes the bin via a symlink; install() silently no-op'd.
@@ -125,12 +304,12 @@ test("install runs when invoked via a symlink (npm/npx .bin/ristretto path)", ()
   const prefix = path.join(tmp, "prefix")
   mkdirSync(prefix, { recursive: true })
 
-  const real = path.resolve("bin/install.mjs")
+  const real = path.resolve("bin", "install.mjs")
   const link = path.join(tmp, "ristretto-link.mjs")
   symlinkSync(real, link)
 
-  // OPENCODE_CONFIG_DIR pins resolvePrefix() to <prefix>. PKG_ROOT resolves to
-  // the real repo (has both source and staged trees), so this test isolates Bug 1.
+  // OPENCODE_CONFIG_DIR pins resolvePrefix() to <prefix>. Default pkgRoot = PKG_ROOT =
+  // the repo, which IS source layout now — the assertion stays dest-side only.
   const result = spawnSync("node", [link], {
     env: { ...process.env, OPENCODE_CONFIG_DIR: prefix },
     encoding: "utf8",
@@ -142,76 +321,97 @@ test("install runs when invoked via a symlink (npm/npx .bin/ristretto path)", ()
   expect(installed.length).toBe(8)
 })
 
-test("install reads from <pkgRoot>/ristretto/ when pkgRoot contains only the shipped tree (no commands/, no .claude-plugin/)", () => {
-  // Bug 2 — installer previously read .claude-plugin/plugin.json and commands/,
-  // which are source-layout paths absent from the npm tarball. Stage a temp
-  // pkgRoot containing ONLY the shipped tree (ristretto/ + .opencode/plugins/
-  // ristretto.mjs) and prove install() succeeds. A unique marker in
-  // pkgRoot/ristretto/plugin.json proves the read came from pkgRoot (not PKG_ROOT).
-  const prefix = mkdtempSync(path.join(tmpdir(), "ristretto-pkg-"))
-  const pkgRoot = mkdtempSync(path.join(tmpdir(), "ristretto-root-"))
-  const realRistretto = path.resolve("ristretto")
-  const realPlugin = path.resolve(".opencode", "plugins", "ristretto.mjs")
+// --- opencode-source-layout-packaging ------------------------------------------------
 
-  // Mirror the npm tarball layout. ristretto/ contains subdirs (skills/, briefs/,
-  // reference/) since the 0.17 staging, so the copy is recursive.
-  const mirror = (src: string, dest: string) => {
-    mkdirSync(dest, { recursive: true })
-    for (const f of readdirSync(src, { withFileTypes: true })) {
-      if (f.isDirectory()) mirror(path.join(src, f.name), path.join(dest, f.name))
-      else copyFileSync(path.join(src, f.name), path.join(dest, f.name))
-    }
-  }
-  mirror(realRistretto, path.join(pkgRoot, "ristretto"))
-  mkdirSync(path.join(pkgRoot, ".opencode", "plugins"), { recursive: true })
-  copyFileSync(realPlugin, path.join(pkgRoot, ".opencode", "plugins", "ristretto.mjs"))
-
-  // Sanity — packaged root must NOT contain the source-layout paths the fix removes.
-  expect(existsSync(path.join(pkgRoot, "commands"))).toBe(false)
-  expect(existsSync(path.join(pkgRoot, ".claude-plugin"))).toBe(false)
-
-  // Stamp a marker on the staged plugin.json so we can prove install read from
-  // pkgRoot (not from PKG_ROOT/.claude-plugin/plugin.json, the source path).
-  const MARKER = "9.99.99-from-pkgRoot"
-  writeFileSync(path.join(pkgRoot, "ristretto", "plugin.json"),
+test("install maps SOURCE-layout pkgRoot to the installed layout: unprefixed commands/, scripts/, .claude-plugin/ reads", () => {
+  const pkgRoot = mkdtempSync(path.join(tmpdir(), "ristretto-srcmirror-"))
+  createSourceMirror(pkgRoot)
+  // Marker proves the manifest read moved off the staged path (supersedes
+  // npx-install-fix's pkgRoot/ristretto/plugin.json read).
+  const MARKER = "9.99.99-from-source"
+  writeFileSync(path.join(pkgRoot, ".claude-plugin", "plugin.json"),
     JSON.stringify({ name: "ristretto", version: MARKER }))
+  const prefix = mkdtempSync(path.join(tmpdir(), "ristretto-srcprefix-"))
 
-  // Act — must complete without ENOENT.
   expect(() => install(prefix, pkgRoot)).not.toThrow()
 
-  // (a) plugin.json came from <pkgRoot>/ristretto/plugin.json (marker survives).
-  const pluginJson = JSON.parse(readFileSync(path.join(prefix, "ristretto", "plugin.json"), "utf8"))
-  expect(pluginJson.version).toBe(MARKER)
-
-  // (b) commands landed at <prefix>/ristretto/skills/ristretto-<name>.md, exact staged names, no double-prefix.
+  // (a) 8 skills files named ristretto-{brew,…}.md, each once, no double prefix.
   const skillsDir = path.join(prefix, "ristretto", "skills")
   const installed = readdirSync(skillsDir).filter((f) => f.endsWith(".md"))
   expect(installed.length).toBe(8)
-  for (const f of installed) {
-    expect(f).not.toMatch(/ristretto-ristretto-/)
-    expect(f.startsWith("ristretto-")).toBe(true)
-  }
+  for (const f of installed) expect(f).not.toMatch(/ristretto-ristretto-/)
   for (const name of ["brew", "grind", "help", "prep", "pull", "shot", "status", "tamp"]) {
-    expect(installed).toContain(`ristretto-${name}.md`)
+    expect(installed.filter((f) => f === `ristretto-${name}.md`).length).toBe(1)
   }
 
-  // (c) every staged file is present at the prefix; the plugin mjs lands at <prefix>/plugins/.
-  for (const f of [
-    "gate.js",
-    "gate-lsp.mjs",
-    "version.js",
-    "testreport.js",
-    "junit.js",
-    "baseline.js",
-    "format-migration.md",
-    "plugin.json",
-  ]) {
+  // (b) every mapped destination exists — scripts reads, plugin.json, docs, briefs, reference.
+  for (const f of ["gate.js", "testreport.js", "junit.js", "baseline.js", "version.js",
+    "gate-lsp.mjs", "plugin.json", "format-migration.md"]) {
     expect(existsSync(path.join(prefix, "ristretto", f))).toBe(true)
   }
-  // 0.17 layout: the shared-rule dirs the commands reference.
   for (const f of ["common.md", "planner.md", "implementer.md", "reviewer.md", "closer.md"]) {
     expect(existsSync(path.join(prefix, "ristretto", "briefs", f))).toBe(true)
   }
   expect(existsSync(path.join(prefix, "ristretto", "reference", "config.md"))).toBe(true)
+
+  // (c) the manifest came from pkgRoot/.claude-plugin/ (marker survives) and the mjs
+  // landed at <prefix>/plugins/.
+  const pluginJson = JSON.parse(readFileSync(path.join(prefix, "ristretto", "plugin.json"), "utf8"))
+  expect(pluginJson.version).toBe(MARKER)
   expect(existsSync(path.join(prefix, "plugins", "ristretto.mjs"))).toBe(true)
+})
+
+test("install(prefix, pkgRoot) does not mutate pkgRoot (source bytes pristine after install)", () => {
+  const pkgRoot = mkdtempSync(path.join(tmpdir(), "ristretto-srcmirror2-"))
+  createSourceMirror(pkgRoot)
+  const sha = (p: string) => createHash("sha256").update(readFileSync(p)).digest("hex")
+  const versionBefore = sha(path.join(pkgRoot, "scripts", "version.js"))
+  const brewBefore = sha(path.join(pkgRoot, "commands", "brew.md"))
+  const prefix = mkdtempSync(path.join(tmpdir(), "ristretto-srcprefix2-"))
+
+  install(prefix, pkgRoot)
+
+  expect(sha(path.join(pkgRoot, "scripts", "version.js"))).toBe(versionBefore)
+  expect(sha(path.join(pkgRoot, "commands", "brew.md"))).toBe(brewBefore)
+  // The adaptation never touched the source bytes: placeholders and the source-relative
+  // manifest path are still there.
+  expect(readFileSync(path.join(pkgRoot, "commands", "brew.md"), "utf8"))
+    .toContain("${CLAUDE_PLUGIN_ROOT}/scripts/version.js")
+  expect(readFileSync(path.join(pkgRoot, "scripts", "version.js"), "utf8"))
+    .toContain("path.join(__dirname, '..', '.claude-plugin', 'plugin.json')")
+})
+
+test("installed version.js is layout-patched at install time (source copy untouched)", () => {
+  const pkgRoot = mkdtempSync(path.join(tmpdir(), "ristretto-srcmirror3-"))
+  createSourceMirror(pkgRoot)
+  const sha = (p: string) => createHash("sha256").update(readFileSync(p)).digest("hex")
+  const before = sha(path.join(pkgRoot, "scripts", "version.js"))
+  const prefix = mkdtempSync(path.join(tmpdir(), "ristretto-srcprefix3-"))
+  install(prefix, pkgRoot)
+  expect(sha(path.join(pkgRoot, "scripts", "version.js"))).toBe(before)
+
+  // Branch 1 — no roadmap: version.js read plugin.json BESIDE it (the unpatched
+  // ../.claude-plugin/ path would exit 2 "cannot read the plugin version").
+  const emptyProject = mkdtempSync(path.join(tmpdir(), "ristretto-emptyproj-"))
+  const r1 = spawnSync("node", [path.join(prefix, "ristretto", "version.js"), "check"], {
+    cwd: emptyProject,
+    encoding: "utf8",
+    env: { ...process.env, CLAUDE_PROJECT_DIR: emptyProject },
+  })
+  expect(r1.status).toBe(0)
+  expect(r1.stdout).toContain("nothing to migrate")
+
+  // Branch 2 — a 0.9-stamped roadmap: the printed migration line names the file
+  // actually installed at <prefix>/ristretto/format-migration.md.
+  const oldProject = mkdtempSync(path.join(tmpdir(), "ristretto-oldproj-"))
+  mkdirSync(path.join(oldProject, "docs", "ristretto"), { recursive: true })
+  writeFileSync(path.join(oldProject, "docs", "ristretto", "roadmap.md"),
+    "# Roadmap\n<!-- ristretto-format: 0.9 -->\n")
+  const r2 = spawnSync("node", [path.join(prefix, "ristretto", "version.js"), "check"], {
+    cwd: oldProject,
+    encoding: "utf8",
+    env: { ...process.env, CLAUDE_PROJECT_DIR: oldProject },
+  })
+  expect(r2.status).toBe(1)
+  expect(r2.stdout).toContain(path.join(prefix, "ristretto", "format-migration.md"))
 })
