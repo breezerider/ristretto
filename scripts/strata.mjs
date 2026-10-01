@@ -1,51 +1,62 @@
 #!/usr/bin/env node
-// strata.mjs — helpers for collapsing docs/ristretto commits.
-// Platform-agnostic (node) counterpart of the bash helper. Never rewrites
-// history itself — it reports, classifies, validates, and suggests.
+// strata.mjs — deterministic helpers for collapsing docs/ristretto commits.
+//
+// The command is branch-only and non-destructive: `stratify` builds a fresh PR
+// branch inside a throwaway `git worktree`, performing all replay there, so the
+// main checkout's HEAD and index are never touched. There is no rewrite mode,
+// no remote/mode machinery, and no gate lifecycle.
 //
 // Verbs:
-//   check-branch            print whether the current branch is the default
-//   validate-range <range>   check the range is usable; exit non-zero + stderr on error
-//   authors <range>         list distinct authors in the range + the repo's
-//                           configured identity, for attribution confirmation
-//   analyze <range> [--mode M] [--ticket ID]
-//                           enumerate/classify relevant commits, remote check,
-//                           recommend a mode, suggest a PR branch name, draft a subject
-//   coalesce-runs <range> [--strict]
-//                           emit machine-readable runs of contiguous same-scope,
-//                           same-area commits (for --fold orchestration)
+//   check-branch                       print current/default branch + a resolvable suggested range
+//   validate-range <range>             check the range is usable; exit non-zero + stderr on error
+//   authors <range>                    list distinct authors in the range + configured identity
+//   analyze <range> [--ticket ID]      classify relevant commits, derive type-3 retitles, suggest a PR branch
+//   stratify <range> --pr-branch X [--subject S] [--retitle <hash>=<subject>]... [--fold] [--ticket T]
+//                                      build the cleaned PR branch (worktree-isolated); prints JSON
 
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
-// NOTE: execFileSync passes args directly to the binary — there is NO shell,
-// so refs/hashes are passed bare (never wrapped in quotes) and a range is
-// passed as one arg like `a..b`.
-function git(args) {
-  try {
-    const r = execFileSync('git', args, { encoding: 'utf8' });
-    return r.replace(/\n$/, '');
-  } catch { return null; }
+// A test seam: when STRATA_GIT names a JS file, every git call is routed through
+// it via the running node binary. This keeps the suite portable (no bash shim, no
+// PATH wrapper — process.execPath directly) while the product still shells out to
+// the real git in ordinary use.
+const FAKE_GIT = process.env.STRATA_GIT || null;
+
+function spawnGit(args, cwd, input) {
+  return spawnSync(
+    FAKE_GIT ? process.execPath : 'git',
+    FAKE_GIT ? [FAKE_GIT, ...args] : args,
+    { encoding: 'utf8', cwd: cwd || process.cwd(), ...(input !== undefined ? { input } : {}) },
+  );
 }
 
-function gitQuiet(args) {
-  try { execFileSync('git', args, { stdio: 'ignore' }); return true; }
-  catch { return false; }
+// Capture stdout, or null on a non-zero exit. execFileSync semantics, but routed
+// through the seam above.
+function git(args, cwd) {
+  const r = spawnGit(args, cwd);
+  if (r.status !== 0) return null;
+  return (r.stdout || '').replace(/\n$/, '');
+}
+
+function gitQuiet(args, cwd) {
+  return spawnGit(args, cwd).status === 0;
+}
+
+function fail(msg) {
+  console.error(msg);
+  process.exit(2);
 }
 
 function defaultBranch() {
-  try {
-    const h = git(['symbolic-ref', 'refs/remotes/origin/HEAD']);
-    if (h) return h.replace('refs/remotes/origin/', '');
-  } catch { /* no origin/HEAD */ }
+  const h = git(['symbolic-ref', 'refs/remotes/origin/HEAD']);
+  if (h) return h.replace('refs/remotes/origin/', '');
   for (const b of ['main', 'master']) {
     if (gitQuiet(['show-ref', '--verify', '--quiet', `refs/heads/${b}`])) return b;
   }
   return null;
-}
-
-function rangeError(range, verb) {
-  console.error(`${verb}: cannot read range '${range}' — not a valid hash or ref in this repository (typo? wrong branch? not fetched?)`);
-  process.exit(2);
 }
 
 function currentBranch() {
@@ -53,28 +64,9 @@ function currentBranch() {
   return b && b.length ? b : null; // null when detached
 }
 
-// Resolve the configured upstream remote for the current branch. Reads
-// branch.<cur>.remote, falls back to init.defaultRemote, then 'origin'.
-// Cheap (one config read per step), called once per analyze.
-function resolveRemote() {
-  const cur = currentBranch();
-  if (cur) {
-    const r = git(['config', '--get', `branch.${cur}.remote`]);
-    if (r) return r;
-  }
-  const def = git(['config', '--get', 'init.defaultRemote']);
-  if (def) return def;
-  return 'origin';
-}
-
-// ONE batched `git log --remotes=<remote> --format=%H <range>` call.
-// Returns a Set of full 40-char hashes reachable from the upstream remote.
-// Replaces the prior O(n) per-hash `git branch -r --contains <hash>` loop and
-// the later short-hash prefix-guessing intersection.
-function pushedHashes(range, remote) {
-  const out = git(['log', `--remotes=${remote}`, '--format=%H', range]);
-  if (!out) return new Set();
-  return new Set(out.split('\n').filter(Boolean));
+function rangeError(range, verb) {
+  console.error(`${verb}: cannot read range '${range}' — not a valid hash or ref in this repository (typo? wrong branch? not fetched?)`);
+  process.exit(2);
 }
 
 // ---- verb: check-branch ------------------------------------------------
@@ -86,7 +78,10 @@ function checkBranch() {
   console.log(`default: ${def ?? '(none)'}`);
   console.log(`is_default: ${isDefault}`);
   if (def && cur !== def) {
-    console.log(`suggested_range: merge-base(${def}, HEAD)..HEAD`);
+    // A resolvable range, not prose: merge-base resolved to its hash, so the
+    // exact string can be fed straight to validate-range.
+    const mb = git(['merge-base', def, 'HEAD']);
+    if (mb) console.log(`suggested_range: ${mb}..HEAD`);
   }
 }
 
@@ -175,15 +170,14 @@ function authors(range) {
   console.log('== Default configured identity ==');
   console.log(`  ${configured || '(none set — ask the user for an identity)'}`);
   if (configured && seen.size > 0) {
-    const match = seen.has(configured);
-    console.log(`  configured_is_in_range: ${match}`);
+    console.log(`  configured_is_in_range: ${seen.has(configured)}`);
   }
+  console.log(`distinct_authors: ${seen.size}`);
 }
 
-// ---- verb: analyze ------------------------------------------------------
-// ONE batched call: per-commit hash, subject, and merged file list, in
-// topological-first order (newest first), replacing the prior two
-// shell-outs per commit (diff-tree + log -1 for every hash).
+// ---- classification -----------------------------------------------------
+// ONE batched call: per-commit hash, subject, and merged file list,
+// topological-first (newest first).
 function commitsInRange(range) {
   const out = git(['log', '--format=%H|%s', '--name-only', range]);
   if (out === null) return null; // git failed — caller must not read this as "empty range"
@@ -201,34 +195,83 @@ function commitsInRange(range) {
   return commits;
 }
 
+// A docs path requires the trailing slash: `docs/ristretto-old/` is NOT docs.
+const isDocsPath = (f) => f.startsWith('docs/ristretto/');
+// Only the exact `docs(ristretto)` scope counts — `docs(api):` does not.
+const isDocsScoped = (subj) => /^docs\(ristretto\):/.test(subj);
+
 function classify(c) {
-  const pathDocs = c.files.some((f) => f.startsWith('docs/ristretto'));
-  const others = c.files.filter((f) => !f.startsWith('docs/ristretto'));
-  const subjDocs = /^docs\([^)]*\):/.test(c.subj);
+  const pathDocs = c.files.some(isDocsPath);
+  const others = c.files.filter((f) => !isDocsPath(f));
+  const subjDocs = isDocsScoped(c.subj);
   let kind;
   if (pathDocs && others.length === 0) kind = 'docs-only';
   else if (pathDocs && others.length > 0) kind = 'MIXED (docs path + non-docs files)';
-  else if (!pathDocs && subjDocs) kind = 'docs-SCOPED but NO docs path (retitle to real scope)';
+  else if (!pathDocs && subjDocs) kind = 'type-3 (docs(ristretto) scope, no docs path)';
   else kind = 'non-docs (leave untouched)';
-  return { kind, subjDocs };
+  return { kind, subjDocs, pathDocs };
 }
 
+// Ticket-shaped token: word-boundary anchored so a bare encoding token like
+// `UTF-8` (one digit) never matches, while `ABC-123` does.
+const TICKET_RE = /(?:^|[^A-Za-z0-9])([A-Z]{2,8}-[0-9]{2,})(?![A-Za-z0-9])/;
 function firstTicket(candidates) {
   for (const c of candidates) {
-    const m = /[A-Z]{1,8}-[0-9]+/.exec(c);
-    if (m) return m[0];
+    const m = TICKET_RE.exec(c);
+    if (m) return m[1];
   }
   return null;
 }
 
-function scopeOf(subject) {
-  const m = /^([a-z]+)\(([^)]+)\):\s/.exec(subject);
-  return m ? m[2] : null;
+// ---- type-3 retitle derivation -----------------------------------------
+// Ordered, path-driven, case-insensitive, any location. First matching rule
+// wins; distinct outcomes >1 or 0 → chore, no scope; the scope is always
+// stripped (the script never invents a feature-slug scope the paths don't name).
+const RETITLE_RULES = [
+  { type: 'docs', test: (f) => /(^|\/)(readme|authors|license|contributing|changelog)(\.[^/]*)?$/i.test(f) },
+  { type: 'test', test: (f) => /(^|\/)(tests?|spec)\//i.test(f) || /\.(test|spec)\.[^/]+$/i.test(f) },
+  { type: 'ci', test: (f) => /(^|\/)(ci|\.github\/workflows|\.circleci)\//i.test(f)
+      || /(^|\/)(\.gitlab-ci\.ya?ml|jenkinsfile|azure-pipelines\.ya?ml)$/i.test(f) },
+  { type: 'chore', test: (f) => /(^|\/)(package\.json|\.ristretto\.json)$/i.test(f) },
+];
+
+function typeOfPath(f) {
+  for (const r of RETITLE_RULES) if (r.test(f)) return r.type;
+  return 'chore';
 }
 
-function typeOf(subject) {
-  const m = /^([a-z]+)(?:\([^)]*\))?:\s/.exec(subject);
-  return m ? m[1] : null;
+// Intent markers (rule 5): a BUG:/FIX:/HACK: prefix, a `fix_` token, or git's
+// canonical `Revert "…"` subject upgrades an otherwise-chore outcome to `fix`.
+function hasIntentMarker(subj) {
+  return /(^|\W)(BUG|FIX|HACK):/.test(subj)
+      || /(^|\W)fix_/.test(subj)
+      || /(^|\W)Revert "/.test(subj);
+}
+
+function deriveRetitle(files, subj) {
+  const types = new Set(files.map(typeOfPath));
+  let type;
+  if (types.size === 1) type = [...types][0];
+  else if (types.size === 0) type = hasIntentMarker(subj) ? 'fix' : 'chore';
+  else type = 'chore'; // >1 outcome → chore, no refusal
+  if (type === 'chore' && hasIntentMarker(subj)) type = 'fix';
+  return { type, candidates: [...types] };
+}
+
+// The replayed subject for a docs-scoped commit: strip `type(scope): ` and
+// re-prefix with the derived type. An explicit override wins outright.
+function stripConventional(subj) {
+  const m = /^[a-z]+(?:\([^)]*\))?:\s*(.*)$/.exec(subj);
+  return m ? m[1] : subj;
+}
+function retitleSubject(subj, derived) {
+  return `${derived.type}: ${stripConventional(subj)}`;
+}
+
+// The original message body for a commit, so a retitle preserves it.
+function bodyOf(hash, cwd) {
+  const b = git(['log', '-1', '--format=%b', hash], cwd);
+  return b ? b.replace(/\n+$/, '') : '';
 }
 
 function areaOf(file) {
@@ -237,59 +280,22 @@ function areaOf(file) {
   return parts.slice(0, 2).join('/');
 }
 
-// Union of files across a run's members, computed from the commits themselves —
-// no mutation state carried on candidates.
-function curFilesOf(run, commitsByHash) {
-  const set = new Set();
-  for (const c of run) {
-    const commit = commitsByHash.get(c.hash);
-    if (commit) for (const f of commit.files) set.add(f);
-  }
-  return set;
-}
-
-// Assign kind/subjDocs onto each commit in place (shared by analyze and
-// coalesce-runs).
-function classifyAll(commits) {
-  for (const c of commits) Object.assign(c, classify(c));
-}
-
-// The JSON shape shared by analyze's Fold-runs section and coalesce-runs.
-// coalesce-runs adds `files` on top via the spread in coalesceRunsJson.
-function runJson(run) {
-  const start = run[run.length - 1].hash;
-  const end = run[0].hash;
-  return {
-    start,
-    end,
-    start_short: start.slice(0, 7),
-    end_short: end.slice(0, 7),
-    scope: run[0].scope,
-    type: run[0].type,
-    count: run.length,
-    subjects: run.map((c) => c.subj),
-  };
-}
-
+// Internal fold helper — NOT a public verb.
 function coalesceRuns(commits, { minLen = 2 } = {}) {
   const runs = [];
   let cur = [];
-  let curAreas = new Set(); // union of all member areas — membership reads this
+  let curAreas = new Set();
   const flush = () => {
     if (cur.length >= minLen) runs.push(cur);
     cur = [];
     curAreas = new Set();
   };
   for (const c of commits) {
-    // Break the run on ANY docs-related commit: docs-only, MIXED (docs path +
-    // non-docs files), docs-SCOPED-but-no-docs-path. A MIXED commit's docs
-    // files must not ride a fold commit — fold runs are non-docs only, per
-    // briefs/strata-fold.md ("any docs commit breaks a run").
     if (c.kind !== 'non-docs (leave untouched)') { flush(); continue; }
-    const scope = scopeOf(c.subj);
-    const areas = new Set(c.files.map(areaOf).filter((a) => !a.startsWith('docs/ristretto')));
+    const { type, scope } = parseConventional(c.subj);
+    const areas = new Set(c.files.map(areaOf).filter((a) => !isDocsPath(a)));
     if (!scope || areas.size === 0) { flush(); continue; }
-    const candidate = { hash: c.hash, scope, subj: c.subj, type: typeOf(c.subj) };
+    const candidate = { hash: c.hash, scope, subj: c.subj, type };
     if (cur.length === 0) {
       cur.push(candidate);
       for (const a of areas) curAreas.add(a);
@@ -310,35 +316,50 @@ function coalesceRuns(commits, { minLen = 2 } = {}) {
   return runs;
 }
 
-function coalesceRunsJson(range, mode) {
-  if (!range) {
-    console.error('coalesce-runs: no range given — usage: coalesce-runs <range> [--strict]');
-    process.exit(2);
-  }
-  const commits = commitsInRange(range);
-  if (commits === null) rangeError(range, 'coalesce-runs');
-  if (commits.length === 0) {
-    console.log(JSON.stringify({ range, mode: mode || 'loose', runs: [] }, null, 2));
-    return;
-  }
-  classifyAll(commits);
-  const minLen = mode === 'strict' ? 3 : 2;
-  const useMode = coalesceRuns(commits, { minLen });
-  const commitsByHash = new Map(commits.map((c) => [c.hash, c]));
-  const out = useMode.map((run) => ({
-    ...runJson(run),
-    files: [...curFilesOf(run, commitsByHash)].sort(),
-  }));
-  console.log(JSON.stringify({ range, mode: mode || 'loose', runs: out }, null, 2));
+// One parse for the conventional-commit header: the scope and the type come from
+// the same subject, so `coalesceRuns` calls this once instead of twice.
+function parseConventional(subj) {
+  const m = /^([a-z]+)(?:\(([^)]+)\))?:\s/.exec(subj);
+  return m ? { type: m[1], scope: m[2] || null } : { type: null, scope: null };
 }
 
-function analyze(range, mode, ticket) {
+function runJson(run) {
+  const start = run[run.length - 1].hash;
+  const end = run[0].hash;
+  return {
+    start,
+    end,
+    scope: run[0].scope,
+    type: run[0].type,
+    count: run.length,
+    subjects: run.map((c) => c.subj),
+  };
+}
+
+function classifyAll(commits) {
+  for (const c of commits) Object.assign(c, classify(c));
+}
+
+// ---- merge detection ----------------------------------------------------
+function hasMerge(range) {
+  const out = git(['rev-list', '--merges', '--count', range]);
+  if (out === null) return null; // git failed — caller must not read this as "no merges"
+  return Number(out) > 0;
+}
+
+// ---- verb: analyze ------------------------------------------------------
+function analyze(range, ticket) {
   if (!range) {
-    console.error('analyze: no range given — usage: analyze <range> [--mode M] [--ticket ID]');
+    console.error('analyze: no range given — usage: analyze <range> [--ticket ID]');
     process.exit(2);
   }
   const commits = commitsInRange(range);
   if (commits === null) rangeError(range, 'analyze');
+  const merged = hasMerge(range);
+  if (merged === null) rangeError(range, 'analyze');
+  if (merged) {
+    fail(`analyze: range '${range}' contains a merge commit — a linear replay cannot handle merges. Pick a linear range.`);
+  }
   classifyAll(commits);
   const relevant = commits.filter((c) => c.kind !== 'non-docs (leave untouched)');
   if (relevant.length === 0) {
@@ -346,109 +367,256 @@ function analyze(range, mode, ticket) {
     process.exit(0);
   }
 
-  // Batched push-history narrowing (ONE git call + in-memory Set lookup);
-  // recommend derives from it.
-  const { pushed, hasRemote } = computePushed(commits, range);
-  const recommend = pushed.length ? 'branch' : 'rewrite';
-  printRemoteCheck(pushed, hasRemote);
-  printRelevantCommits(range, relevant);
-  const runs = coalesceRuns(commits, { minLen: 2 });
-  printCoalesceHint(runs);
-  printFoldRuns(runs);
-  printModeAndPrBranch(mode, recommend, relevant, ticket);
-  printDraftSubject(relevant);
-  console.log('');
-  console.log('>> This helper stops here — it never rewrites history itself.');
-  console.log('>> Run the workflow in the chosen mode (briefs/strata-rewrite.md or briefs/strata-branch.md).');
-}
-
-// Batched push-history narrowing: ONE git call + in-memory Set lookup.
-function computePushed(commits, range) {
-  const pushed = [];
-  const remote = resolveRemote();
-  const hasRemote = !!git(['remote']);
-  if (hasRemote) {
-    const remoteSet = pushedHashes(range, remote);
-    for (const c of commits) {
-      if (remoteSet.has(c.hash)) pushed.push(c.hash.slice(0, 7));
-    }
-  }
-  return { pushed, hasRemote };
-}
-
-function printRemoteCheck(pushed, hasRemote) {
-  console.log('');
-  console.log('== Remote check ==');
-  if (pushed.length) {
-    console.log(`WARNING: affected commits are already on a remote: ${pushed.join(' ')}`);
-    console.log('Rewriting diverges pushed history. Prefer --mode branch unless the user');
-    console.log('explicitly wants an in-place rewrite and confirms it.');
-  } else if (!hasRemote) {
-    console.log('No remotes configured — nothing is pushed, no push-divergence risk.');
-  } else {
-    console.log('None affected are on a remote — safe to rewrite locally.');
-  }
-}
-
-function printRelevantCommits(range, relevant) {
   console.log('');
   console.log(`== Commits in ${range} relevant to docs/ristretto ==`);
   for (const r of relevant) {
     console.log(`  ${r.hash.slice(0, 7)}  [${r.kind}]  ${r.subj}`);
   }
-}
 
-// Coalesce-hint human-readable view — the same runs the Fold-runs JSON below
-// reports. Computed once in analyze() and passed to both printers.
-function printCoalesceHint(runs) {
+  const type3 = relevant.filter((c) => c.kind === 'type-3 (docs(ristretto) scope, no docs path)');
+  if (type3.length) {
+    console.log('');
+    console.log('== Type-3 retitle proposals ==');
+    for (const c of type3) {
+      const d = deriveRetitle(c.files, c.subj);
+      const candidates = d.candidates.length ? d.candidates.join(', ') : '(none)';
+      console.log(`  ${c.hash.slice(0, 7)}  derived_type: ${d.type}`);
+      console.log(`           type_candidates: ${candidates} (no scope is derived from paths)`);
+      console.log(`           proposed_subject: ${retitleSubject(c.subj, d)}`);
+    }
+  }
+
+  const runs = coalesceRuns(commits, { minLen: 2 });
   console.log('');
   console.log('== Coalesce-hint ==');
   if (runs.length === 0) {
     console.log('  No contiguous runs of small same-scope commits detected.');
-    return;
-  }
-  for (const run of runs) {
-    console.log(`  ${run.length} consecutive non-docs commits share scope (${run[0].scope}):`);
-    for (const c of run) {
-      console.log(`    - ${c.hash.slice(0, 7)} ${c.subj}`);
+  } else {
+    for (const run of runs) {
+      console.log(`  ${run.length} consecutive non-docs commits share scope (${run[0].scope}):`);
+      for (const c of run) console.log(`    - ${c.hash.slice(0, 7)} ${c.subj}`);
     }
-    console.log('  Consider asking the user whether to coalesce these into one');
-    console.log('  <type>(scope) commit before proceeding.');
-    console.log('  (Suggestion only — NEVER auto-merge; this is the user\'s call.)');
   }
-}
 
-// Loose runs for --fold action (≥2, same scope, same area; type-agnostic) —
-// the same runs the hint above printed.
-function printFoldRuns(runs) {
   console.log('');
   console.log('== Fold-runs (machine-readable) ==');
   console.log(JSON.stringify(runs.map(runJson), null, 2));
-}
 
-function printModeAndPrBranch(mode, recommend, relevant, ticket) {
-  console.log('');
-  console.log('== Mode ==');
-  console.log(`  Mode requested: ${mode || '<unspecified — ask the user>'}`);
-  console.log(`  Recommended:   ${recommend}`);
-  console.log('  (branch mode = non-destructive, source branch untouched;');
-  console.log('   rewrite mode = rewrites working branch in place)');
-
-  if (!ticket) {
-    const cur = currentBranch() || '';
-    const subjects = relevant.map((r) => r.subj);
-    ticket = firstTicket([cur, ...subjects]);
-  }
-  const prBranch = ticket ? `${ticket}-pr` : `${currentBranch() || 'feature'}-pr`;
-  console.log(`  PR branch:     ${prBranch}`);
-}
-
-function printDraftSubject(relevant) {
-  const first = relevant[0];
-  const draft = first.subjDocs ? first.subj : `docs(ristretto): ${first.subj}`;
   console.log('');
   console.log('== Draft subject ==');
-  console.log(`  ${draft}  (review/adjust — capture the whole collapsed set, not the first member)`);
+  const first = relevant[0];
+  console.log(`  ${first.subjDocs ? first.subj : `docs(ristretto): ${first.subj}`}`);
+
+  console.log('');
+  console.log('== PR branch ==');
+  if (!ticket) ticket = firstTicket([currentBranch() || '', ...relevant.map((r) => r.subj)]);
+  console.log(`  pr_branch: ${ticket ? `${ticket}-pr` : `${currentBranch() || 'feature'}-pr`}`);
+}
+
+// Clear the branch's docs/ristretto path, then lay down `source`'s tree when it
+// has one. The clear always runs — `--ignore-unmatch` makes it a safe no-op on a
+// docs-less branch — because a MIXED replay may have just staged docs this path
+// must drop (a cat-file-guarded clear would leave them behind). Only the overlay
+// is guarded: a source with no docs lays nothing down.
+function overlayDocsFrom(source, wt) {
+  gitQuiet(['rm', '-r', '-f', '-q', '--ignore-unmatch', '--', 'docs/ristretto'], wt);
+  if (gitQuiet(['cat-file', '-e', `${source}:docs/ristretto`], wt)) {
+    gitQuiet(['checkout', source, '--', 'docs/ristretto'], wt);
+  }
+}
+
+// Apply only a commit's non-docs changes. The docs hunk is excluded from the
+// patch outright, so neither the `modify/delete` nor the `content` conflict over
+// `docs/ristretto` can arise — replay never depends on an intermediate docs
+// state, because the final `overlayDocsFrom(origTip, wt)` owns the docs tree.
+// A conflict on a real (non-docs) path still fails and stratify still refuses.
+// `spawnGit` routes through the test seam, so this works under the fake git too.
+function applyNonDocs(hash, wt) {
+  const diff = spawnGit(['diff', '--binary', `${hash}^`, hash, '--', '.', ':(exclude)docs/ristretto'], wt);
+  if (diff.status !== 0) return { ok: false, detail: null };
+  const apply = spawnGit(['apply', '--index', '--3way', '-'], wt, diff.stdout || '');
+  if (apply.status !== 0) {
+    // `--3way` reports `Applied patch to '<path>' with conflicts.` on stdout;
+    // a straight apply failure reports `error: patch failed: <path>:<line>` on
+    // stderr. Surface whichever path collided, so the refusal names the file.
+    const combined = `${apply.stdout || ''}\n${apply.stderr || ''}`;
+    const m = /patch failed:\s*([^\s:]+)/.exec(combined)
+      || /Applied patch to '([^']+)' with conflicts/.exec(combined);
+    return { ok: false, detail: m ? m[1] : null };
+  }
+  return { ok: true, detail: null };
+}
+
+// ---- verb: stratify -----------------------------------------------------
+function parseStratifyArgs(args) {
+  const out = { retitle: new Map() };
+  let range = null;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    const take = (k) => (a === k ? args[++i] : a.slice(k.length + 1));
+    if (a === '--pr-branch' || a.startsWith('--pr-branch=')) out.prBranch = take('--pr-branch');
+    else if (a === '--subject' || a.startsWith('--subject=')) out.subject = take('--subject');
+    else if (a === '--ticket' || a.startsWith('--ticket=')) out.ticket = take('--ticket');
+    else if (a === '--retitle') {
+      const v = args[++i] || '';
+      const eq = v.indexOf('=');
+      if (eq > 0) out.retitle.set(v.slice(0, eq), v.slice(eq + 1));
+    } else if (a.startsWith('--retitle=')) {
+      const v = a.slice('--retitle='.length);
+      const eq = v.indexOf('=');
+      if (eq > 0) out.retitle.set(v.slice(0, eq), v.slice(eq + 1));
+    } else if (a === '--fold') out.fold = true;
+    else if (!range) range = a;
+  }
+  return { ...out, range };
+}
+
+function stratify(opts) {
+  const { range } = opts;
+  if (!range) fail('stratify: no range given — usage: stratify <range> --pr-branch <name> [--subject S] [--retitle <hash>=<subject>]... [--fold] [--ticket T]');
+  // A ticket supplies the default branch name when --pr-branch is omitted,
+  // mirroring analyze's `pr_branch:` suggestion.
+  if (!opts.prBranch && opts.ticket) opts.prBranch = `${opts.ticket}-pr`;
+  if (!opts.prBranch) fail('stratify: --pr-branch <name> (or --ticket T) is required');
+
+  const base = git(['rev-parse', '--verify', `${range.split('..')[0]}^{commit}`]);
+  const origTip = git(['rev-parse', '--verify', `${(range.split('..')[1] || 'HEAD')}^{commit}`]);
+  if (base === null || origTip === null) fail(`stratify: cannot read range '${range}' — not a valid hash or ref in this repository`);
+  const merged = hasMerge(range);
+  if (merged === null) fail(`stratify: cannot read range '${range}'.`);
+  if (merged) fail(`stratify: range '${range}' contains a merge commit — a linear replay cannot handle merges. Pick a linear range.`);
+
+  // Dirty tree refusal — before any branch or worktree exists.
+  const dirty = git(['status', '--porcelain']);
+  if (dirty) fail('stratify: working tree is dirty — commit or stash your changes first (the main checkout is never touched otherwise).');
+  // Branch-exists refusal.
+  if (gitQuiet(['show-ref', '--verify', '--quiet', `refs/heads/${opts.prBranch}`])) {
+    fail(`stratify: branch '${opts.prBranch}' already exists — pick another name or delete it first.`);
+  }
+
+  const commits = commitsInRange(range);
+  if (commits === null) fail(`stratify: cannot read range '${range}'.`);
+  classifyAll(commits);
+  const oldest = [...commits].reverse(); // commitsInRange is newest-first
+
+  // --fold: detect runs over the original commits (newest-first, exactly as the
+  // analyze hint does) and replay each run's members as one folded commit. The
+  // detected members are non-docs only — coalesceRuns flushes on any docs commit.
+  const foldRunOf = new Map(); // oldest-member hash -> [members, oldest-first]
+  if (opts.fold) {
+    for (const run of coalesceRuns(commits, { minLen: 2 })) {
+      const oldestFirst = [...run].reverse();
+      foldRunOf.set(oldestFirst[0].hash, oldestFirst);
+    }
+  }
+
+  const tmpParent = fs.mkdtempSync(path.join(os.tmpdir(), 'strata-'));
+  const wt = path.join(tmpParent, 'wt');
+  let branchCreated = false;
+  const cleanup = (deleteBranch) => {
+    gitQuiet(['worktree', 'remove', '--force', wt]);
+    if (deleteBranch && branchCreated) gitQuiet(['branch', '-D', opts.prBranch]);
+    try { fs.rmSync(tmpParent, { recursive: true, force: true }); } catch { /* best effort */ }
+  };
+
+  try {
+    if (!gitQuiet(['worktree', 'add', '-b', opts.prBranch, wt, base])) {
+      cleanup(false);
+      fail(`stratify: could not create a worktree for branch '${opts.prBranch}'.`);
+    }
+    branchCreated = true;
+
+    // --retitle keys may be short hashes (as analyze prints them); resolve each
+    // against the range's commits so a short-hash override is honoured.
+    if (opts.retitle.size) {
+      const full = new Map();
+      for (const [k, v] of opts.retitle) {
+        const hit = commits.find((c) => c.hash === k || c.hash.startsWith(k));
+        full.set(hit ? hit.hash : k, v);
+      }
+      opts.retitle = full;
+    }
+    const subjectFor = (c) => {
+      if (opts.retitle.has(c.hash)) return opts.retitle.get(c.hash);
+      if (isDocsScoped(c.subj)) return retitleSubject(c.subj, deriveRetitle(c.files, c.subj));
+      return null; // keep original
+    };
+    // Retitle a replayed commit, keeping its original body as a second paragraph.
+    const amendTo = (hash, subject) => {
+      const body = bodyOf(hash, wt);
+      const args = ['commit', '--amend', '-m', subject];
+      if (body) args.push('-m', body);
+      if (!gitQuiet(args, wt)) throw { message: `could not retitle ${hash}` };
+    };
+
+    const replayed = new Set();
+    for (const c of oldest) {
+      if (replayed.has(c.hash)) continue;
+      if (c.kind === 'docs-only') continue; // absorbed into the appended docs commit
+
+      if (foldRunOf.has(c.hash)) {
+        const members = foldRunOf.get(c.hash);
+        for (const m of members) {
+          // coalesceRuns only admits non-docs members, but route them through the
+          // same docs-free apply so the invariant holds if that ever changes.
+          const a = applyNonDocs(m.hash, wt);
+          if (!a.ok) { throw { conflict: m.hash, path: a.detail }; }
+          replayed.add(m.hash);
+        }
+        const sharedType = new Set(members.map((m) => m.type)).size === 1;
+        const type = sharedType ? members[0].type : 'chore';
+        const summary = stripConventional(members[members.length - 1].subj);
+        if (!gitQuiet(['commit', '-m', `${type}(${members[0].scope}): ${summary}`], wt)) {
+          throw { message: 'fold commit failed' };
+        }
+        continue;
+      }
+
+      if (c.kind === 'MIXED (docs path + non-docs files)') {
+        // Replay only the non-docs portion; the docs hunk is never in the patch,
+        // so no docs conflict can occur mid-replay. The docs tree is laid down
+        // wholesale by overlayDocsFrom(origTip, wt) after the loop.
+        const a = applyNonDocs(c.hash, wt);
+        if (!a.ok) { throw { conflict: c.hash, path: a.detail }; }
+        if (!gitQuiet(['commit', '-C', c.hash], wt)) { throw { conflict: c.hash }; }
+        const s = subjectFor(c);
+        if (s) amendTo(c.hash, s);
+      } else if (c.kind === 'type-3 (docs(ristretto) scope, no docs path)') {
+        if (!gitQuiet(['cherry-pick', c.hash], wt)) { throw { conflict: c.hash }; }
+        const s = subjectFor(c);
+        if (s) amendTo(c.hash, s);
+      } else {
+        if (!gitQuiet(['cherry-pick', c.hash], wt)) { throw { conflict: c.hash }; }
+      }
+    }
+
+    // Base docs may be stale and tip deletions must propagate — clear, then overlay the tip.
+    overlayDocsFrom(origTip, wt);
+    if (!gitQuiet(['diff', '--cached', '--quiet'], wt)) {
+      const subj = opts.subject || 'docs(ristretto): stratify the planning history';
+      if (!gitQuiet(['commit', '-m', subj], wt)) throw { message: 'could not create the docs commit' };
+    }
+
+    const prTip = git(['rev-parse', 'HEAD'], wt);
+    const verified = gitQuiet(['diff', '--quiet', origTip, prTip], wt);
+    if (!verified) {
+      // A non-identical tree means the replay dropped or changed content — a
+      // broken result, not a usable branch. Leave nothing behind.
+      cleanup(true);
+      fail(`stratify: result tree differs from ${origTip} — the replay is not byte-identical; removed the PR branch, nothing left behind.`);
+    }
+    cleanup(false); // branch persists
+    console.log(JSON.stringify({ pr_branch: opts.prBranch, base, pr_tip: prTip, verified }, null, 2));
+  } catch (e) {
+    if (e && e.conflict) {
+      gitQuiet(['cherry-pick', '--abort'], wt); // no-op when the conflict came from `git apply`
+      cleanup(true);
+      const where = e.path ? ` (non-docs path '${e.path}')` : '';
+      fail(`stratify: cherry-pick conflict on ${e.conflict}${where} — aborted, no PR branch left behind.`);
+    }
+    cleanup(true);
+    fail(`stratify: ${(e && e.message) || 'failed to build the PR branch'}.`);
+  }
 }
 
 // ---- dispatch -----------------------------------------------------------
@@ -458,29 +626,19 @@ switch (verb) {
   case 'validate-range': validateRange(args[0] || ''); break;
   case 'authors': authors(args[0] || ''); break;
   case 'analyze': {
-    let mode = null; let ticket = null; let range = null;
+    let ticket = null; let range = null;
     for (let i = 0; i < args.length; i++) {
       const a = args[i];
-      if (a === '--mode') { mode = args[i + 1]; i++; }
-      else if (a.startsWith('--mode=')) mode = a.slice('--mode='.length);
-      else if (a === '--ticket') { ticket = args[i + 1]; i++; }
+      if (a === '--ticket') { ticket = args[i + 1]; i++; }
       else if (a.startsWith('--ticket=')) ticket = a.slice('--ticket='.length);
       else if (!range) range = a;
     }
-    analyze(range, mode, ticket);
+    analyze(range, ticket);
     break;
   }
-  case 'coalesce-runs': {
-    let range = null; let mode = null;
-    for (const a of args) {
-      if (a === '--strict') mode = 'strict';
-      else if (!range) range = a;
-    }
-    coalesceRunsJson(range, mode);
-    break;
-  }
+  case 'stratify': stratify(parseStratifyArgs(args)); break;
   default:
     console.log('usage: node scripts/strata.mjs <verb> [args]');
-    console.log('verbs: check-branch | validate-range <range> | authors <range> | analyze <range> [--mode M] [--ticket ID] | coalesce-runs <range> [--strict]');
+    console.log('verbs: check-branch | validate-range <range> | authors <range> | analyze <range> [--ticket ID] | stratify <range> --pr-branch <name> [--subject S] [--retitle <hash>=<subject>]... [--fold] [--ticket T]');
     process.exit(1);
 }
